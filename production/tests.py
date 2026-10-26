@@ -944,6 +944,18 @@ class SampleImportTests(TestCase):
         admin.refresh_from_db()
         self.assertTrue(admin.check_password("A-new-long-random-password-2026"))
 
+    def test_reset_password_activates_only_requested_existing_user(self):
+        call_command("import_sample_data", verbosity=0)
+        with patch.dict("os.environ", {"AVT_NEW_PASSWORD": "Secure-random-test-password-2026"}):
+            call_command("reset_user_password", "user", activate=True, verbosity=0)
+        user = User.objects.get(username="user")
+        self.assertTrue(user.is_active)
+        self.assertTrue(user.check_password("Secure-random-test-password-2026"))
+        self.assertTrue(user.password.startswith("argon2$argon2id$"))
+        self.assertFalse(User.objects.get(username="planner").is_active)
+        with self.assertRaises(CommandError):
+            call_command("reset_user_password", "missing", verbosity=0)
+
 
 class ReleaseSurfaceTests(TestCase):
     def test_login_has_favicon_and_no_published_test_passwords(self):

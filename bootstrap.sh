@@ -15,7 +15,11 @@ if [[ ! "$REPOSITORY_URL" =~ ^https://[^[:space:]]+\.git$ ]]; then
     exit 1
 fi
 if [[ -e "$INSTALL_DIR" ]]; then
-    echo "Каталог $INSTALL_DIR уже существует. Установка не перезаписывает данные." >&2
+    if [[ -f "$INSTALL_DIR/manage.py" && -f "$INSTALL_DIR/install.sh" ]]; then
+        echo "Проект уже установлен в $INSTALL_DIR; открываю меню обслуживания."
+        exec bash "$INSTALL_DIR/install.sh"
+    fi
+    echo "Каталог $INSTALL_DIR уже существует и не является проектом АРСАТ." >&2
     exit 1
 fi
 if ! command -v apt-get >/dev/null || ! command -v systemctl >/dev/null; then
