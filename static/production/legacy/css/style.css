@@ -1973,6 +1973,17 @@ body {
 }
 
 .standards-filters { flex-wrap: wrap; }
+.standards-filters input[type="number"] { width: 90px; }
+.norming-result { margin: 10px 0; color: #275273; font-size: 13px; min-height: 18px; }
+.data-grid input[type="date"] { min-width: 140px; max-width: 170px; padding: 4px; }
+.order-filter-dialog .backup-admin-card { width: min(620px, 90vw); }
+.order-filter-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 18px 0; }
+.order-filter-fields label { display: grid; gap: 5px; }
+.order-filter-fields select, .order-filter-fields input { min-height: 34px; border: 1px solid #cbd7e0; border-radius: 6px; padding: 5px 8px; }
+.report-filter-fields { display: flex; flex-wrap: wrap; gap: 10px; margin: 12px 0; }
+.report-filter-fields label { display: grid; gap: 4px; font-size: 12px; }
+.report-filter-fields input { min-height: 34px; border: 1px solid #cbd7e0; border-radius: 6px; padding: 5px 8px; }
+@media (max-width: 600px) { .order-filter-fields { grid-template-columns: 1fr; } }
 
 .technology-office {
   flex: 1 1 680px;

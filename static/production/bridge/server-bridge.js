@@ -25,6 +25,10 @@ function installTppFields() {
 function connectTppTables() {
   const tableEndpoint = table => {
     const base = `/api/legacy/table/${encodeURIComponent(table.dataset.moduleStore)}/`;
+    if (table.dataset.moduleStore === 'operations') {
+      const active = [...document.querySelectorAll('.module-filters select')][1]?.value;
+      return active === 'Нет' || active === 'Все' ? `${base}?include_inactive=1` : base;
+    }
     if (table.dataset.moduleStore !== 'timesheet') return base;
     const month = document.querySelector('.module-filters input[type="month"]')?.value || '';
     return `${base}?month=${encodeURIComponent(month)}`;
@@ -42,29 +46,38 @@ function connectTppTables() {
         throw new Error(result.error || 'Не удалось сохранить таблицу');
       }
       const saved = await fetch(endpoint);
-      if (saved.ok) renderModuleTable(table, (await saved.json()).rows);
+      if (saved.ok) { renderModuleTable(table, (await saved.json()).rows); applyModuleFilters(); }
     } catch (error) {
       legacyNotice(error.message, true);
       const saved = await fetch(endpoint);
-      if (saved.ok) renderModuleTable(table, (await saved.json()).rows);
+      if (saved.ok) { renderModuleTable(table, (await saved.json()).rows); applyModuleFilters(); }
     }
   };
   document.querySelectorAll('[data-module-store]').forEach(table => {
     fetch(tableEndpoint(table))
       .then(response => response.ok ? response.json() : null)
-      .then(data => { if (Array.isArray(data?.rows)) renderModuleTable(table, data.rows); if (typeof updateOneCCount === 'function') updateOneCCount(); })
+      .then(data => { if (Array.isArray(data?.rows)) { renderModuleTable(table, data.rows); applyModuleFilters(); } if (typeof updateOneCCount === 'function') updateOneCCount(); })
       .catch(error => legacyNotice(error.message, true));
   });
   document.querySelector('.timesheet-table')?.closest('.module-table-card')
     ?.querySelector('input[type="month"]')?.addEventListener('change', event => {
       const table = document.querySelector('.timesheet-table');
       fetch(tableEndpoint(table)).then(response => response.json())
-        .then(data => renderModuleTable(table, data.rows))
+        .then(data => { renderModuleTable(table, data.rows); applyModuleFilters(); })
         .catch(error => legacyNotice(error.message, true));
       const month = event.target.value;
       const heading = table.closest('.module-table-card')?.querySelector('.card-heading h3');
       if (heading && month) heading.textContent = new Intl.DateTimeFormat('ru-RU', { month: 'long', year: 'numeric' }).format(new Date(`${month}-01T12:00:00`));
     });
+  if (document.body.dataset.page === 'operations') {
+    const status = [...document.querySelectorAll('.module-filters select')][1];
+    status?.addEventListener('change', () => {
+      const table = document.querySelector('[data-module-store="operations"]');
+      fetch(tableEndpoint(table)).then(response => response.json())
+        .then(data => { renderModuleTable(table, data.rows); applyModuleFilters(); })
+        .catch(error => legacyNotice(error.message, true));
+    });
+  }
 }
 
 function connectSettings() {
@@ -208,6 +221,208 @@ function legacyDate(value) {
 function isoDate(value) {
   const match = String(value || '').trim().match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
   return match ? `${match[3]}-${match[2]}-${match[1]}` : value;
+}
+
+// Встроенный календарь браузера открывается по нажатию на поле даты.
+document.addEventListener('click', event => {
+  const input = event.target.closest('input[type="date"], input[type="month"]');
+  if (input && !input.disabled && typeof input.showPicker === 'function') {
+    try { input.showPicker(); } catch (_) { /* Браузер сам покажет свой календарь. */ }
+  }
+});
+
+function normingFields() {
+  return Object.fromEntries(['year', 'quarter', 'drawings', 'hours', 'factor', 'staff']
+    .map(key => [key, document.querySelector(`[data-norming="${key}"]`)]));
+}
+
+function showNormingResult(data, preview = false) {
+  const output = document.querySelector('#norming-result');
+  if (!output) return;
+  const fields = normingFields();
+  fields.drawings.value = data.drawing_count;
+  const factor = Number(fields.factor.value);
+  const hours = Number(fields.hours.value);
+  const staff = Number(fields.staff.value);
+  const planned = (Number(data.base_hours) * factor).toFixed(2);
+  const capacity = (hours * staff).toFixed(2);
+  const deficit = Math.max(Number(planned) - Number(capacity), 0).toFixed(2);
+  const changed = Boolean(data.approval && (Number(data.approval.planned_hours) !== Number(planned) ||
+    Number(data.approval.actual_hours) !== Number(data.actual_hours) ||
+    Number(data.approval.capacity_hours) !== Number(capacity) ||
+    Number(data.approval.drawing_count || data.drawing_count) !== Number(data.drawing_count)));
+  output.textContent = `${preview ? 'Предварительно' : data.approval ? 'Утверждено' : 'Период'}: ` +
+    `${data.items} позиций, ${data.drawing_count} чертежей; ` +
+    `план ${planned} ч, факт ${data.actual_hours} ч, фонд ${capacity} ч, дефицит ${deficit} ч.` +
+    (data.approval && !preview ? ` Утвердил ${data.approval.approved_by}.` : '') +
+    (changed && !preview ? ' Данные изменились после утверждения; требуется повторное утверждение.' : '');
+  const selected = new Set(data.item_ids.map(String));
+  document.querySelectorAll('.data-grid tbody tr').forEach(row => {
+    row.hidden = !selected.has(row.dataset.itemPk);
+  });
+}
+
+async function loadNorming(preview = false) {
+  const fields = normingFields();
+  const query = new URLSearchParams({ year: fields.year.value, quarter: fields.quarter.value });
+  const response = await fetch(`/api/legacy/norming/?${query}`);
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || 'Не удалось получить нормирование');
+  if (data.approval && !preview) {
+    fields.hours.value = data.approval.hours_per_employee;
+    fields.factor.value = data.approval.labor_factor;
+    fields.staff.value = data.approval.staff_count;
+  }
+  showNormingResult(data, preview);
+  return data;
+}
+
+function initializeNorming() {
+  if (document.body.dataset.page !== 'standards') return;
+  const fields = normingFields();
+  const today = new Date();
+  const years = new Set([today.getFullYear()]);
+  document.querySelectorAll('.data-grid tbody tr[data-due-date]').forEach(row => years.add(Number(row.dataset.dueDate.slice(0, 4))));
+  [...years].sort((a, b) => b - a).forEach(year => fields.year.add(new Option(String(year), String(year))));
+  fields.year.value = String(today.getFullYear());
+  fields.quarter.value = String(Math.floor(today.getMonth() / 3) + 1);
+  if (currentRole === 'economist') document.querySelector('[data-action="norming-approve"]').hidden = true;
+  for (const field of [fields.year, fields.quarter]) field.addEventListener('change', () =>
+    loadNorming().catch(error => legacyNotice(error.message, true)));
+  loadNorming().catch(error => legacyNotice(error.message, true));
+}
+
+function installOrderFilters() {
+  if (!document.querySelector('[data-action="filter-orders"]')) return;
+  document.body.insertAdjacentHTML('beforeend', `
+    <dialog class="backup-dialog order-filter-dialog" id="order-filter-dialog" aria-labelledby="order-filter-title">
+      <section class="content-card backup-admin-card">
+        <div class="card-heading"><h3 id="order-filter-title">Фильтр заказов</h3>
+          <button type="button" class="ghost-button" data-action="close-order-filters">Закрыть</button></div>
+        <div class="order-filter-fields">
+          <label>Подразделение <select data-order-filter="department"><option value="">Все</option></select></label>
+          <label>Изделие <input data-order-filter="product" type="search" placeholder="Наименование или чертёж"></label>
+          <label>Приоритет <select data-order-filter="priority"><option value="">Все</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option></select></label>
+          <label>Стадия <select data-order-filter="status"><option value="">Все</option></select></label>
+          <label>Срок до <input data-order-filter="due" type="date"></label>
+        </div>
+        <div class="product-editor-actions"><button type="button" class="ghost-button" data-action="clear-order-filters">Сбросить</button>
+          <button type="button" class="primary-button" data-action="apply-order-filters">Применить</button></div>
+      </section>
+    </dialog>`);
+}
+
+function updateOrderFilterOptions() {
+  const dialog = document.querySelector('#order-filter-dialog');
+  if (!dialog) return;
+  for (const [key, source] of [['department', 'department'], ['status', 'status']]) {
+    const select = dialog.querySelector(`[data-order-filter="${key}"]`);
+    const current = select.value;
+    select.replaceChildren(new Option('Все', ''));
+    const values = new Set([...document.querySelectorAll('.data-grid tbody tr')]
+      .map(row => source === 'department' ? row.dataset.department : row.cells[9]?.textContent.trim()).filter(Boolean));
+    [...values].sort().forEach(value => select.add(new Option(value, value)));
+    select.value = current;
+  }
+}
+
+function applyOrderFilters() {
+  const dialog = document.querySelector('#order-filter-dialog');
+  if (!dialog) return;
+  const field = key => dialog.querySelector(`[data-order-filter="${key}"]`).value;
+  const search = document.querySelector('#order-search')?.value.trim().toLowerCase() || '';
+  document.querySelectorAll('.data-grid tbody tr').forEach(row => {
+    row.hidden = Boolean((field('department') && row.dataset.department !== field('department')) ||
+      (field('product') && !`${row.cells[3]?.textContent} ${row.cells[4]?.textContent}`.toLowerCase()
+        .includes(field('product').trim().toLowerCase())) ||
+      (field('priority') && row.cells[10]?.textContent.trim() !== field('priority')) ||
+      (field('status') && row.cells[9]?.textContent.trim() !== field('status')) ||
+      (field('due') && row.dataset.dueDate > field('due')) ||
+      (search && !row.cells[0]?.textContent.toLowerCase().includes(search)));
+  });
+}
+
+function applyProductionFilters() {
+  if (document.body.dataset.page !== 'production') return;
+  const start = document.querySelector('[data-production-date="start"]')?.value || '';
+  const end = document.querySelector('[data-production-date="end"]')?.value || '';
+  const department = document.querySelector('.side-panel')?.dataset.selectedDepartment || '';
+  document.querySelectorAll('.data-grid tbody tr').forEach(row => {
+    row.hidden = Boolean((department && row.dataset.department !== department) ||
+      (start && row.dataset.dueDate < start) || (end && row.dataset.dueDate > end));
+  });
+}
+
+function updateProductionDepartments() {
+  if (document.body.dataset.page !== 'production') return;
+  const departments = [...new Set([...document.querySelectorAll('.data-grid tbody tr')]
+    .map(row => row.dataset.department).filter(Boolean))].sort();
+  document.querySelectorAll('[data-action="production-department"]').forEach((button, index) => {
+    button.hidden = !departments[index];
+    if (departments[index]) {
+      button.dataset.department = departments[index]; button.textContent = departments[index];
+    }
+  });
+}
+
+let timesheetDepartments = new Map();
+
+function updateTimesheetMetrics(table) {
+  if (!table.classList.contains('timesheet-table')) return;
+  const rows = [...table.tBodies[0].rows].filter(row => !row.hidden);
+  const number = (row, index) => Number(row.cells[index]?.textContent.trim().replace(',', '.')) || 0;
+  const plan = rows.reduce((sum, row) => sum + number(row, 4), 0);
+  const actual = rows.reduce((sum, row) => sum + number(row, 5), 0);
+  const output = rows.reduce((sum, row) => sum + number(row, 8), 0);
+  const metrics = [...document.querySelectorAll('.module-metrics article span')];
+  if (metrics.length >= 4) {
+    metrics[0].textContent = plan.toLocaleString('ru-RU');
+    metrics[1].textContent = actual.toLocaleString('ru-RU');
+    metrics[2].textContent = plan ? `${(actual / plan * 100).toFixed(1).replace('.', ',')}%` : '0%';
+    metrics[3].textContent = actual ? (output / actual).toFixed(2).replace('.', ',') : '0';
+  }
+}
+
+function applyModuleFilters() {
+  const table = document.querySelector('.module-data-table');
+  const filters = document.querySelector('.module-filters');
+  if (!table || !filters) return;
+  const controls = [...filters.querySelectorAll('select, input[type="search"]')];
+  const page = document.body.dataset.page;
+  const allValue = value => !value || value === 'Все' || value.startsWith('Все ');
+  [...table.tBodies[0].rows].forEach(row => {
+    const cells = row.cells;
+    let visible = true;
+    if (page === 'personnel') visible = (allValue(controls[0].value) || cells[2].textContent.trim() === controls[0].value) &&
+      cells[3].textContent.toLowerCase().includes(controls[1].value.trim().toLowerCase()) &&
+      (allValue(controls[2].value) || cells[7].textContent.trim() === controls[2].value);
+    if (page === 'operations') visible = (allValue(controls[0].value) || cells[2].textContent.trim() === controls[0].value) &&
+      cells[1].textContent.toLowerCase().includes(controls[1].value.trim().toLowerCase()) &&
+      (allValue(controls[2].value) || cells[7].textContent.trim() === controls[2].value);
+    if (page === 'timesheet') visible = [cells[0].textContent, cells[1].textContent].join(' ')
+      .toLowerCase().includes(controls[1].value.trim().toLowerCase()) &&
+      (allValue(controls[0].value) || timesheetDepartments.get(cells[0].textContent.trim()) === controls[0].value);
+    row.hidden = !visible;
+  });
+  const selected = table.tBodies[0].querySelector('tr.selected');
+  if (selected?.hidden) {
+    selected.classList.remove('selected');
+    [...table.tBodies[0].rows].find(row => !row.hidden)?.classList.add('selected');
+  }
+  updateTimesheetMetrics(table);
+}
+
+async function loadTimesheetDepartments() {
+  if (document.body.dataset.page !== 'timesheet') return;
+  const response = await fetch('/api/legacy/table/timesheet/');
+  if (!response.ok) return;
+  const { departments } = await response.json();
+  timesheetDepartments = new Map(Object.entries(departments || {}));
+  const select = document.querySelector('.module-filters select');
+  const values = new Set(Object.values(departments || {}).filter(Boolean));
+  select.replaceChildren(new Option('Все подразделения', ''));
+  [...values].sort().forEach(value => select.add(new Option(value, value)));
+  applyModuleFilters();
 }
 
 let serverUsers = [];
@@ -413,7 +628,7 @@ async function loadPlans() {
 async function loadReportFromServer() {
   if (document.body.dataset.page !== 'reports') return;
   const kind = document.querySelector('#report-select')?.value || 'plan-a';
-  const response = await fetch(`/api/legacy/report/?kind=${encodeURIComponent(kind)}`);
+  const response = await fetch(`/api/legacy/report/?${reportQuery(kind)}`);
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || 'Не удалось обновить отчёт');
   showReport(false);
@@ -424,6 +639,14 @@ async function loadReportFromServer() {
     data.headers.forEach(value => { const cell = document.createElement('th'); cell.textContent = value; header.append(cell); });
   }
   replacePlanRows(table, data.rows);
+}
+
+function reportQuery(kind) {
+  const params = new URLSearchParams({ kind });
+  document.querySelectorAll('[data-report-filter]').forEach(field => {
+    if (field.value.trim()) params.set(field.dataset.reportFilter, field.value.trim());
+  });
+  return params.toString();
 }
 
 let processCatalog = null;
@@ -633,9 +856,9 @@ async function loadOrdersFromServer() {
       const values = [item.number, '1', item.object_name || item.customer, item.product, item.drawing,
         String(item.drawing_count),
         item.due_date.slice(0, 4), String(Math.floor((Number(item.due_date.slice(5, 7)) - 1) / 3) + 1),
-        item.quantity, item.status, item.priority, item.request_number, '', legacyDate(item.start_date),
+         item.quantity, item.status, item.priority, item.request_number, legacyDate(item.request_date), legacyDate(item.registration_date || item.start_date),
         item.note, '', `${item.progress}%`, '', item.norm_per_item,
-        item.planned_hours, item.actual_hours, legacyDate(item.due_date), '', '', ''];
+        item.planned_hours, item.actual_hours, legacyDate(item.due_date), '', '', item.executors || ''];
       const row = body.insertRow();
       if (index === 0) row.classList.add('selected');
       row.dataset.order = item.number;
@@ -643,9 +866,14 @@ async function loadOrdersFromServer() {
       row.dataset.orderPk = item.id;
       row.dataset.itemPk = item.item_id;
       row.dataset.productPk = item.product_id;
+      row.dataset.dueDate = item.due_date;
+      row.dataset.department = item.department;
       for (let i = 0; i < count; i += 1) row.insertCell().textContent = values[i] ?? '';
     });
     if (orders.length) updateOrderDetails(body.rows[0]);
+    updateOrderFilterOptions();
+    updateProductionDepartments();
+    applyProductionFilters();
     await applySavedColumnPreferences(table);
   } catch (error) { legacyNotice(error.message, true); }
 }
@@ -754,8 +982,10 @@ function resetEntryForm() {
   const localDate = value => `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
   const start = document.querySelector('[data-entry="start-date"]');
   const end = document.querySelector('[data-entry="due-date"]');
+  const registered = document.querySelector('[data-entry="registration-date"]');
   if (start) start.value = localDate(today);
   if (end) end.value = localDate(due);
+  if (registered) registered.value = localDate(today);
 }
 
 async function saveLegacyOrder(exitAfter) {
@@ -770,7 +1000,8 @@ async function saveLegacyOrder(exitAfter) {
     object_name: row.querySelector('[data-entry="product-object"]')?.value?.trim() || ''
   })).filter(item => item.name);
   const payload = { number: get('order'), customer: get('object'), request_number: get('request'),
-    start_date: start, due_date: due, priority: Number(get('priority') || 2), note: get('note'),
+    start_date: start, due_date: due, registration_date: get('registration-date'),
+    request_date: get('request-date'), priority: Number(get('priority') || 2), note: get('note'),
     machine: get('machine'), cnc: get('cnc'), cnc_control: get('cnc-control'),
     cnc_program: get('cnc-program'), one_c_code: get('one-c-code'), items };
   if (!payload.number || !payload.customer || !start || !due || !items.length) {
@@ -794,8 +1025,10 @@ async function saveSelectedOrder(row) {
   const payload = { item_id: row.dataset.itemPk, number: cells[0].textContent.trim(),
     customer: row.dataset.customer || cells[2].textContent.trim(),
     object_name: cells[2].textContent.trim(),
-    drawing_count: Number(cells[5].textContent.trim()), start_date: isoDate(cells[13].textContent),
-    due_date: isoDate(cells[21].textContent),
+    drawing_count: Number(cells[5].textContent.trim()),
+    registration_date: cells[13].querySelector('input')?.value || isoDate(cells[13].textContent),
+    request_date: cells[12].querySelector('input')?.value || isoDate(cells[12].textContent),
+    due_date: cells[21].querySelector('input')?.value || isoDate(cells[21].textContent),
     product: cells[3].textContent.trim(), drawing: cells[4].textContent.trim(),
     quantity: Number(cells[8].textContent.trim()), priority: Number(cells[10].textContent.trim()) || 2,
     request_number: cells[11].textContent.trim(), note: cells[14].textContent.trim(),
@@ -803,6 +1036,9 @@ async function saveSelectedOrder(row) {
   const response = await fetch(`/api/legacy/orders/${row.dataset.orderPk}/`, { method: 'PUT', headers: apiHeaders(), body: JSON.stringify(payload) });
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || 'Не удалось сохранить');
+  for (const [index, key] of [[12, 'request_date'], [13, 'registration_date'], [21, 'due_date']])
+    cells[index].textContent = legacyDate(payload[key]);
+  row.dataset.dueDate = payload.due_date;
   [...cells].forEach(cell => cell.contentEditable = 'false');
   row.dataset.editing = 'false';
   row.dataset.order = payload.number;
@@ -817,6 +1053,61 @@ document.addEventListener('click', async event => {
     sessionStorage.clear(); window.location.href = '/login.html'; return;
   }
   const action = event.target.closest('[data-action]')?.dataset.action;
+  if (action === 'production-all' || action === 'production-department') {
+    event.stopPropagation(); event.preventDefault();
+    document.querySelector('.side-panel').dataset.selectedDepartment =
+      action === 'production-all' ? '' : event.target.closest('[data-department]').dataset.department;
+    applyProductionFilters(); return;
+  }
+  if (action === 'filter-orders') {
+    event.stopPropagation(); event.preventDefault();
+    updateOrderFilterOptions(); document.querySelector('#order-filter-dialog')?.showModal(); return;
+  }
+  if (action === 'close-order-filters') {
+    event.stopPropagation(); event.preventDefault();
+    document.querySelector('#order-filter-dialog')?.close(); return;
+  }
+  if (action === 'apply-order-filters') {
+    event.stopPropagation(); event.preventDefault();
+    applyOrderFilters(); document.querySelector('#order-filter-dialog')?.close(); return;
+  }
+  if (action === 'clear-order-filters' || action === 'reset-search') {
+    event.stopPropagation(); event.preventDefault();
+    document.querySelectorAll('[data-order-filter]').forEach(field => { field.value = ''; });
+    const search = document.querySelector('#order-search'); if (search) search.value = '';
+    applyOrderFilters(); return;
+  }
+  if (['norming-preview', 'norming-clear', 'norming-approve'].includes(action)) {
+    event.stopPropagation(); event.preventDefault();
+    const fields = normingFields();
+    if (action === 'norming-clear') {
+      fields.hours.value = '128'; fields.factor.value = '1'; fields.staff.value = '4';
+      fields.drawings.value = '0';
+      document.querySelector('#norming-result').textContent = '';
+      document.querySelectorAll('.data-grid tbody tr').forEach(row => { row.hidden = false; });
+      return;
+    }
+    if (![fields.hours, fields.factor, fields.staff].every(field => field.checkValidity() && Number(field.value) > 0)) {
+      legacyNotice('Укажите положительные часы, трудоёмкость и численность', true); return;
+    }
+    try {
+      if (action === 'norming-preview') {
+        const data = await loadNorming(true);
+        legacyNotice(`Предварительно сформировано: ${data.items} позиций`);
+      } else {
+        const payload = { year: fields.year.value, quarter: fields.quarter.value,
+          hours_per_employee: fields.hours.value, labor_factor: fields.factor.value,
+          staff_count: fields.staff.value };
+        const response = await fetch('/api/legacy/norming/', {
+          method: 'POST', headers: apiHeaders(), body: JSON.stringify(payload)
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Не удалось утвердить нормирование');
+        showNormingResult(result); legacyNotice('Нормирование утверждено и сохранено в PostgreSQL');
+      }
+    } catch (error) { legacyNotice(error.message, true); }
+    return;
+  }
   if (action === 'backup-open') {
     event.stopPropagation(); event.preventDefault();
     document.querySelector('#database-backup-dialog')?.showModal();
@@ -1062,7 +1353,8 @@ document.addEventListener('click', async event => {
       const kind = { standards: 'standards', production: 'production' }[document.body.dataset.page];
       window.location.href = kind ? `/api/legacy/report/export/?kind=${kind}` : '/reports/export/';
     }
-    else window.location.href = `/api/legacy/report/export/?kind=${action === 'download-all-reports' ? 'all' : encodeURIComponent(document.querySelector('#report-select')?.value || 'plan-a')}`;
+    else window.location.href = `/api/legacy/report/export/?${reportQuery(action === 'download-all-reports'
+      ? 'all' : document.querySelector('#report-select')?.value || 'plan-a')}`;
     return;
   }
   if (action === 'save-order-new' || action === 'save-order-exit') {
@@ -1079,7 +1371,16 @@ document.addEventListener('click', async event => {
     if (row.dataset.editing === 'true') {
       try { await saveSelectedOrder(row); } catch (error) { legacyNotice(error.message, true); }
     } else {
-      [0, 2, 3, 4, 8, 10, 11, 13, 14, 21].forEach(index => { if (row.cells[index]) row.cells[index].contentEditable = 'true'; });
+      [0, 2, 3, 4, 8, 10, 11, 14].forEach(index => { if (row.cells[index]) row.cells[index].contentEditable = 'true'; });
+      for (const index of [12, 13, 21]) {
+        const cell = row.cells[index];
+        const date = isoDate(cell.textContent);
+        cell.replaceChildren();
+        const input = document.createElement('input');
+        input.type = 'date'; input.value = date;
+        input.setAttribute('aria-label', index === 12 ? 'Дата заявки' : index === 13 ? 'Дата ввода' : 'Дата изготовления');
+        cell.append(input);
+      }
       row.dataset.editing = 'true';
       event.target.closest('[data-action="edit-order"]').textContent = 'Сохранить';
       row.cells[0]?.focus();
@@ -1114,9 +1415,13 @@ document.addEventListener('click', async event => {
 
 installTppFields();
 installProductListEditor();
+installOrderFilters();
 installProductEstdActions();
 hideDeferredIntegrations();
 installDatabaseAdmin();
+if (document.body.dataset.page === 'personnel' && currentRole === 'planner') {
+  document.querySelectorAll('[data-module-action]').forEach(button => { button.hidden = true; });
+}
 const timesheetMonthInput = document.querySelector('.timesheet-table')?.closest('.module-table-card')?.querySelector('input[type="month"]');
 if (timesheetMonthInput) {
   const now = new Date();
@@ -1125,6 +1430,13 @@ if (timesheetMonthInput) {
   if (heading) heading.textContent = new Intl.DateTimeFormat('ru-RU', { month: 'long', year: 'numeric' }).format(now);
 }
 connectTppTables();
+loadTimesheetDepartments().catch(error => legacyNotice(error.message, true));
+document.querySelectorAll('.module-filters select, .module-filters input[type="search"]').forEach(field => {
+  field.addEventListener('change', applyModuleFilters);
+  field.addEventListener('input', applyModuleFilters);
+});
+document.querySelector('#order-search')?.addEventListener('input', applyOrderFilters);
+document.querySelectorAll('[data-production-date]').forEach(field => field.addEventListener('change', applyProductionFilters));
 connectSettings();
 connectMaterialCalculator();
 loadMaterialsFromServer().catch(error => legacyNotice(error.message, true));
@@ -1169,7 +1481,9 @@ if (document.body.dataset.page === 'entry') {
   const localDate = value => `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
   const start = document.querySelector('[data-entry="start-date"]');
   const end = document.querySelector('[data-entry="due-date"]');
+  const registered = document.querySelector('[data-entry="registration-date"]');
   if (start && !start.value) start.value = localDate(today);
   if (end && !end.value) end.value = localDate(due);
+  if (registered && !registered.value) registered.value = localDate(today);
 }
-loadOrdersFromServer();
+loadOrdersFromServer().then(initializeNorming);

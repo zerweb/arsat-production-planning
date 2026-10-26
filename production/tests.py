@@ -183,6 +183,7 @@ class WorkflowTests(TestCase):
         self.assertEqual(response.status_code, 200, response.content)
         self.assertEqual(m.LegacyTable.objects.get(key="operations").rows, rows)
         self.assertEqual(self.client.get("/api/legacy/table/operations/").json()["rows"], rows)
+        self.assertGreaterEqual(len(self.client.get("/api/legacy/table/operations/?include_inactive=1").json()["rows"]), 1)
         settings = self.client.put("/api/legacy/table/settings-groups/", data=json.dumps({"rows": [["Группа 1"]]}), content_type="application/json")
         self.assertEqual(settings.status_code, 200)
         self.assertEqual(m.LegacyTable.objects.get(key="settings-groups").rows, [["Группа 1"]])
@@ -237,6 +238,8 @@ class WorkflowTests(TestCase):
         entry = m.TimesheetEntry.objects.get(employee=employee, month=date(2026, 10, 1))
         self.assertEqual(entry.actual_hours, Decimal("150"))
         self.assertEqual(self.client.get("/api/legacy/table/timesheet/?month=2026-10").json()["rows"], timesheet)
+        self.assertEqual(self.client.get("/api/legacy/table/timesheet/?month=2026-10").json()
+            ["departments"]["001"], "Механический цех")
         invalid = self.client.put("/api/legacy/table/timesheet/?month=2026-10",
             data=json.dumps({"rows": [["999", "Неизвестный", "", "", "160", "10", "0", "0", "0"]]}),
             content_type="application/json")
@@ -245,10 +248,13 @@ class WorkflowTests(TestCase):
 
     def test_entry_product_list_fields_persist_and_validate(self):
         payload = {"number": "TEST-LIST", "customer": "ОРМ", "start_date": "2026-10-21", "due_date": "2026-11-21",
+            "registration_date": "2026-10-19", "request_date": "2026-10-18",
             "items": [{"name": "Изделие А", "quantity": 2, "drawing": "A-1", "drawing_count": 3, "object_name": "Корпус"},
                       {"name": "Изделие Б", "quantity": 4, "drawing_count": 1, "object_name": "Узел"}]}
         response = self.client.post("/api/legacy/orders/", data=json.dumps(payload), content_type="application/json")
         self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(m.Order.objects.get(number="TEST-LIST").registration_date, date(2026, 10, 19))
+        self.assertEqual(m.Order.objects.get(number="TEST-LIST").request_date, date(2026, 10, 18))
         items = m.Order.objects.get(number="TEST-LIST").items.order_by("pk")
         self.assertEqual([(item.quantity, item.drawing_count, item.object_name) for item in items],
             [(2, 3, "Корпус"), (4, 1, "Узел")])
@@ -257,10 +263,14 @@ class WorkflowTests(TestCase):
         first = items.first()
         response = self.client.put(f"/api/legacy/orders/{first.order_id}/", data=json.dumps({
             "item_id": first.pk, "drawing_count": 5, "object_name": "Обновленный корпус",
+            "registration_date": "2026-10-20", "request_date": "2026-10-17",
             "reason": "Исправление списка изделий"}), content_type="application/json")
         self.assertEqual(response.status_code, 200, response.content)
         first.refresh_from_db()
         self.assertEqual((first.drawing_count, first.object_name), (5, "Обновленный корпус"))
+        first.order.refresh_from_db()
+        self.assertEqual(first.order.registration_date, date(2026, 10, 20))
+        self.assertEqual(first.order.request_date, date(2026, 10, 17))
         payload["number"] = "TEST-BAD-LIST"
         payload["items"][1]["drawing_count"] = 0
         response = self.client.post("/api/legacy/orders/", data=json.dumps(payload), content_type="application/json")
@@ -374,7 +384,13 @@ class WorkflowTests(TestCase):
         self.assertEqual(self.client.get("/entry.html").status_code, 200)
         self.client.logout()
         self.client.login(username="planner", password="planner")
-        self.assertEqual(self.client.get("/plan-b.html").status_code, 200)
+        plan_page = self.client.get("/plan-b.html")
+        self.assertEqual(plan_page.status_code, 200)
+        self.assertIn('"role": "planner"', plan_page.content.decode())
+        self.assertEqual(self.client.get("/personnel.html").status_code, 200)
+        self.assertEqual(self.client.get("/api/legacy/table/personnel/").status_code, 200)
+        self.assertEqual(self.client.put("/api/legacy/table/personnel/",
+            data=json.dumps({"rows": []}), content_type="application/json").status_code, 403)
 
     def test_settings_permissions_match_visible_tabs(self):
         self.client.logout()
@@ -405,6 +421,7 @@ class WorkflowTests(TestCase):
             ("/api/legacy/plans/?kind=annual&year=2026", None),
             ("/api/legacy/plans/?kind=a&year=2026&quarter=4", None),
             ("/api/legacy/plans/?kind=b&year=2026&quarter=4", None),
+            ("/api/legacy/norming/?year=2026&quarter=4", None),
             ("/api/legacy/table/operations/", None),
             ("/api/legacy/table/personnel/", None),
             ("/api/legacy/table/timesheet/", None),
@@ -515,12 +532,64 @@ class WorkflowTests(TestCase):
         norm_row = next(row for row in self.client.get("/api/legacy/orders/").json()["orders"]
             if row["number"] == order.number)
         self.assertEqual(norm_row["actual_hours"], "2.25")
+        self.assertIn(job.employee.personnel_number, norm_row["executors"])
         production = self.client.get("/api/legacy/report/?kind=production").json()
         row = next(row for row in production["rows"] if row[0] == order.number)
         self.assertEqual(row[4:7], [2, 0, 100])
         plan_b = self.client.get("/api/legacy/report/?kind=plan-b").json()
         line_row = next(row for row in plan_b["rows"] if row[0] == order.number)
         self.assertEqual(line_row[4:6], [2.5, 2.25])
+
+    def test_norming_preview_approval_and_validation(self):
+        order = m.Order.objects.filter(archived=False).first()
+        period = {"year": order.due_date.year, "quarter": (order.due_date.month - 1) // 3 + 1}
+        preview = self.client.get("/api/legacy/norming/", period)
+        self.assertEqual(preview.status_code, 200, preview.content)
+        self.assertGreater(preview.json()["items"], 0)
+        self.assertIsNone(preview.json()["approval"])
+        payload = {**period, "hours_per_employee": "128", "labor_factor": "1.25", "staff_count": 4}
+        saved = self.client.post("/api/legacy/norming/", data=json.dumps(payload), content_type="application/json")
+        self.assertEqual(saved.status_code, 200, saved.content)
+        approval = m.NormingApproval.objects.get(**period)
+        self.assertEqual(approval.planned_hours, (Decimal(saved.json()["base_hours"]) * Decimal("1.25")).quantize(Decimal("0.01")))
+        self.assertEqual(approval.capacity_hours, Decimal("512.00"))
+        self.assertEqual(self.client.get("/api/legacy/norming/", period).json()["approval"]["approved_by"], "admin")
+        self.assertEqual(self.client.post("/api/legacy/norming/", data=json.dumps({**payload,
+            "staff_count": 0}), content_type="application/json").status_code, 400)
+        self.assertEqual(m.NormingApproval.objects.get(**period).staff_count, 4)
+        self.assertEqual(self.client.post("/api/legacy/norming/", data=json.dumps({**payload,
+            "year": 2099}), content_type="application/json").status_code, 400)
+
+    def test_norming_role_permissions(self):
+        order = m.Order.objects.filter(archived=False).first()
+        period = {"year": order.due_date.year, "quarter": (order.due_date.month - 1) // 3 + 1}
+        user = User.objects.create_user("economist_test", password="Unique testing password 2026")
+        user.groups.add(Group.objects.get(name="economist"))
+        self.client.force_login(user)
+        self.assertEqual(self.client.get("/api/legacy/norming/", period).status_code, 200)
+        self.assertEqual(self.client.post("/api/legacy/norming/", data=json.dumps({**period,
+            "hours_per_employee": "128", "labor_factor": "1", "staff_count": 4}),
+            content_type="application/json").status_code, 403)
+
+    def test_report_filters_match_order_product_department_and_dates(self):
+        order = m.Order.objects.filter(archived=False).first()
+        item = order.items.first()
+        filters = {"kind": "production", "order": order.number,
+            "product": item.product.name, "department": order.department.name,
+            "from": order.due_date.isoformat(), "to": order.due_date.isoformat()}
+        response = self.client.get("/api/legacy/report/", filters)
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertTrue(response.json()["rows"])
+        self.assertTrue(all(row[0] == order.number and row[2] == item.product.name
+            for row in response.json()["rows"]))
+        no_matches = self.client.get("/api/legacy/report/", {**filters, "order": "NOT-AN-ORDER"})
+        self.assertEqual(no_matches.json()["rows"], [])
+        self.assertEqual(self.client.get("/api/legacy/report/", {**filters,
+            "from": "2026-12-31", "to": "2026-01-01"}).status_code, 400)
+        export = self.client.get("/api/legacy/report/export/", filters)
+        self.assertEqual(export.status_code, 200, export.content[:100])
+        workbook = load_workbook(io.BytesIO(export.content), read_only=True)
+        self.assertEqual(workbook.active.max_row, len(response.json()["rows"]) + 1)
 
     def test_admin_database_check_queries_postgresql(self):
         response = self.client.get("/api/admin/database/")

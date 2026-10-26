@@ -82,12 +82,15 @@ def save_operations(rows):
     OperationDefinition.objects.exclude(code__in=codes).update(active=False)
 
 
-def operations_rows():
+def operations_rows(include_inactive=False):
     kind_labels = dict(RouteOperation.KINDS)
+    definitions = OperationDefinition.objects.select_related("equipment")
+    if not include_inactive:
+        definitions = definitions.filter(active=True)
     return [[item.code, item.name, kind_labels.get(item.kind, item.kind),
              item.equipment.name if item.equipment else item.equipment_name,
              str(item.min_grade), item.norm_unit, item.estd_code, "Да" if item.active else "Нет"]
-            for item in OperationDefinition.objects.select_related("equipment").filter(active=True).order_by("code")]
+            for item in definitions.order_by("code")]
 
 
 def save_personnel(rows):

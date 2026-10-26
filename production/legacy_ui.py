@@ -23,7 +23,7 @@ from django.template.loader import render_to_string
 from django.utils.html import escape
 from django.middleware.csrf import get_token
 from django.views.decorators.http import require_http_methods
-from .models import AuditLog, Customer, Department, Downtime, Employee, Equipment, Job, LegacyTable, Material, Order, OrderItem, Product, Program, ProgramLine, RouteOperation, WorkCenter
+from .models import AuditLog, Customer, Department, Downtime, Employee, Equipment, Job, LegacyTable, Material, NormingApproval, Order, OrderItem, Product, Program, ProgramLine, RouteOperation, WorkCenter
 from . import legacy_tables
 from .views import role, snapshot
 from . import db_admin
@@ -407,6 +407,63 @@ def plans_api(request):
         return JsonResponse({"ok": False, "error": str(exc)}, status=400)
 
 
+@login_required
+@require_http_methods(["GET", "POST"])
+def norming_api(request):
+    require_page_access(request, "standards")
+    if request.method == "POST" and role(request.user) not in ("admin", "normalizer") and not request.user.is_superuser:
+        raise PermissionDenied
+    try:
+        data = request.GET if request.method == "GET" else json.loads(request.body)
+        year, quarter = int(data.get("year", 0)), int(data.get("quarter", 0))
+        if not 2000 <= year <= 2100 or quarter not in (1, 2, 3, 4):
+            raise ValueError("Укажите год и квартал нормирования")
+        start_month = (quarter - 1) * 3 + 1
+        items = list(OrderItem.objects.filter(order__archived=False, order__due_date__year=year,
+            order__due_date__month__gte=start_month, order__due_date__month__lte=start_month + 2)
+            .select_related("order", "product"))
+        drawing_count = sum(item.drawing_count for item in items)
+        base_hours = sum((route.batch_hours(item.quantity) for item in items
+            for route in item.product.route.filter(approved=True)), Decimal("0"))
+        actual_hours = Job.objects.filter(program_line__order_item__in=items).aggregate(
+            total=Sum("actual_hours"))["total"] or Decimal("0")
+        approval = NormingApproval.objects.filter(year=year, quarter=quarter).select_related("approved_by").first()
+        if request.method == "POST":
+            if not items:
+                raise ValueError("В выбранном периоде нет изделий для утверждения")
+            hours = Decimal(str(data.get("hours_per_employee", "0")))
+            factor = Decimal(str(data.get("labor_factor", "0")))
+            staff = int(data.get("staff_count", 0))
+            if hours <= 0 or hours > 10000 or factor <= 0 or factor > 100 or not 1 <= staff <= 10000:
+                raise ValueError("Часы, коэффициент и численность должны быть положительными")
+            planned = (base_hours * factor).quantize(Decimal("0.01"))
+            capacity = (hours * staff).quantize(Decimal("0.01"))
+            with transaction.atomic():
+                approval, created = NormingApproval.objects.update_or_create(year=year, quarter=quarter, defaults={
+                    "drawing_count": drawing_count, "hours_per_employee": hours,
+                    "labor_factor": factor, "staff_count": staff,
+                    "planned_hours": planned, "actual_hours": actual_hours,
+                    "capacity_hours": capacity, "approved_by": request.user,
+                })
+                AuditLog.objects.create(user=request.user, model_name="NormingApproval", object_id=approval.pk,
+                    action="create" if created else "update", reason=f"Утверждение нормирования {year}/{quarter}")
+        result = {"year": year, "quarter": quarter, "items": len(items),
+            "item_ids": [item.pk for item in items], "drawing_count": drawing_count,
+            "base_hours": str(base_hours.quantize(Decimal("0.01"))),
+            "actual_hours": str(actual_hours.quantize(Decimal("0.01"))),
+            "approval": None}
+        if approval:
+            result["approval"] = {"drawing_count": approval.drawing_count,
+                "planned_hours": str(approval.planned_hours),
+                "actual_hours": str(approval.actual_hours), "capacity_hours": str(approval.capacity_hours),
+                "hours_per_employee": str(approval.hours_per_employee),
+                "labor_factor": str(approval.labor_factor), "staff_count": approval.staff_count,
+                "approved_by": approval.approved_by.username, "approved_at": approval.approved_at.isoformat()}
+        return JsonResponse(result)
+    except (ValueError, TypeError, InvalidOperation, OverflowError) as exc:
+        return JsonResponse({"ok": False, "error": str(exc)}, status=400)
+
+
 REPORT_KINDS = {"plan-a", "plan-b", "standards", "balance", "production"}
 REPORT_HEADERS = {
     "plan-a": ["Заказ", "Объект", "Токарные", "Фрезерные", "Строгальные", "Расточные",
@@ -419,11 +476,37 @@ REPORT_HEADERS = {
 }
 
 
-def report_rows(kind="plan-a"):
+def report_filters(request):
+    values = {key: request.GET.get(key, "").strip() for key in ("order", "product", "department", "from", "to")}
+    for key in ("from", "to"):
+        if values[key]:
+            values[key] = date.fromisoformat(values[key])
+    if values["from"] and values["to"] and values["from"] > values["to"]:
+        raise ValueError("Начало периода позже окончания")
+    return values
+
+
+def filter_report_queryset(queryset, filters, order_path, product_path):
+    if filters.get("order"):
+        queryset = queryset.filter(**{f"{order_path}number__icontains": filters["order"]})
+    if filters.get("product"):
+        queryset = queryset.filter(**{f"{product_path}name__icontains": filters["product"]})
+    if filters.get("department"):
+        queryset = queryset.filter(**{f"{order_path}department__name__icontains": filters["department"]})
+    if filters.get("from"):
+        queryset = queryset.filter(**{f"{order_path}due_date__gte": filters["from"]})
+    if filters.get("to"):
+        queryset = queryset.filter(**{f"{order_path}due_date__lte": filters["to"]})
+    return queryset.distinct()
+
+
+def report_rows(kind="plan-a", filters=None):
+    filters = filters or {}
     if kind in ("plan-b", "balance"):
         rows = []
         lines = ProgramLine.objects.filter(program__name__startswith="План Б ", program__status__in=["approved", "revised"],
             order_item__order__archived=False).select_related("order_item__order", "order_item__product", "work_center")
+        lines = filter_report_queryset(lines, filters, "order_item__order__", "order_item__product__")
         for line in lines:
             item = line.order_item
             accepted = item.order.events.filter(kind="accepted", job__program_line__order_item=item).aggregate(v=Sum("quantity"))["v"] or 0
@@ -438,7 +521,9 @@ def report_rows(kind="plan-a"):
         return rows
     if kind == "standards":
         rows = []
-        for item in OrderItem.objects.filter(order__archived=False).select_related("order", "product"):
+        items = filter_report_queryset(OrderItem.objects.filter(order__archived=False)
+            .select_related("order", "product"), filters, "order__", "product__")
+        for item in items:
             for route in item.product.route.filter(approved=True):
                 planned = route.batch_hours(item.quantity)
                 actual = Job.objects.filter(program_line__order_item=item, operation=route).aggregate(v=Sum("actual_hours"))["v"] or Decimal("0")
@@ -447,17 +532,24 @@ def report_rows(kind="plan-a"):
         return rows
     if kind == "production":
         rows = []
-        for item in OrderItem.objects.filter(order__archived=False).select_related("order", "order__customer", "product"):
+        items = filter_report_queryset(OrderItem.objects.filter(order__archived=False)
+            .select_related("order", "order__customer", "product"), filters, "order__", "product__")
+        for item in items:
             accepted = item.order.events.filter(kind="accepted", job__program_line__order_item=item).aggregate(v=Sum("quantity"))["v"] or 0
             rows.append([item.order.number, item.order.customer.name, item.product.name, item.quantity,
                 accepted, max(item.quantity - accepted, 0), round(100 * accepted / item.quantity) if item.quantity else 0,
                 item.order.get_status_display()])
         return rows
     rows = []
-    for order in Order.objects.filter(archived=False).select_related("customer"):
+    orders = filter_report_queryset(Order.objects.filter(archived=False).select_related("customer"),
+        filters, "", "items__product__")
+    for order in orders:
         categories = [Decimal("0") for _ in range(7)]
         planned = Decimal("0")
-        for item in order.items.select_related("product"):
+        order_items = order.items.select_related("product")
+        if filters.get("product"):
+            order_items = order_items.filter(product__name__icontains=filters["product"])
+        for item in order_items:
             for route in item.product.route.filter(approved=True):
                 hours = route.batch_hours(item.quantity)
                 planned += hours
@@ -480,7 +572,11 @@ def report_api(request):
     kind = request.GET.get("kind", "plan-a")
     if kind not in REPORT_KINDS:
         raise Http404
-    return JsonResponse({"headers": REPORT_HEADERS[kind], "rows": report_rows(kind), "kind": kind})
+    try:
+        rows = report_rows(kind, report_filters(request))
+    except ValueError as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+    return JsonResponse({"headers": REPORT_HEADERS[kind], "rows": rows, "kind": kind})
 
 
 def report_workbook(rows, kind):
@@ -504,15 +600,19 @@ def report_export_api(request):
     kind = request.GET.get("kind", "plan-a")
     if kind != "all" and kind not in REPORT_KINDS:
         raise Http404
+    try:
+        filters = report_filters(request)
+    except ValueError as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
     if kind == "all":
         output = io.BytesIO()
         with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
             for item in sorted(REPORT_KINDS):
-                archive.writestr(f"report-{item}.xlsx", report_workbook(report_rows(item), item))
+                archive.writestr(f"report-{item}.xlsx", report_workbook(report_rows(item, filters), item))
         response = HttpResponse(output.getvalue(), content_type="application/zip")
         response["Content-Disposition"] = 'attachment; filename="reports.zip"'
     else:
-        response = HttpResponse(report_workbook(report_rows(kind), kind),
+        response = HttpResponse(report_workbook(report_rows(kind, filters), kind),
             content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         response["Content-Disposition"] = f'attachment; filename="report-{kind}.xlsx"'
     AuditLog.objects.create(user=request.user, model_name="Report", object_id=0, action="export", reason=kind)
@@ -703,8 +803,7 @@ def page(request, name="index"):
     markup = render_to_string(f"production/legacy/{name}.html", request=request)
     user = request.user
     original_role = role(user)
-    old_role = {"planner": "manager", "supervisor": "manager", "economist": "normalizer"}.get(original_role, original_role)
-    data = {"username": user.username, "fullName": user.get_full_name() or user.username, "role": old_role}
+    data = {"username": user.username, "fullName": user.get_full_name() or user.username, "role": original_role}
     bootstrap = "<script>const legacyUser=" + json.dumps(data, ensure_ascii=False).replace("<", "\\u003c") + ";sessionStorage.setItem('oecAuthorized','true');sessionStorage.setItem('oecUser',legacyUser.username);sessionStorage.setItem('oecFullName',legacyUser.fullName);sessionStorage.setItem('oecRole',legacyUser.role);</script>"
     markup = markup.replace('<script src="js/app.js"></script>', bootstrap + '<script src="/static/production/legacy/js/app.js"></script><script src="/static/production/bridge/server-bridge.js"></script>')
     markup = markup.replace('href="css/style.css"', 'href="/static/production/legacy/css/style.css"><link rel="stylesheet" href="/static/production/bridge/server-bridge.css"')
@@ -782,6 +881,8 @@ def orders_api(request):
                     for route in item.product.route.filter(approved=True)), Decimal("0"))
                 actual_hours = Job.objects.filter(program_line__order_item=item).aggregate(
                     value=Sum("actual_hours"))["value"] or Decimal("0")
+                executors = list(Job.objects.filter(program_line__order_item=item, employee__isnull=False)
+                    .values_list("employee__personnel_number", flat=True).distinct())
                 result.append({"id": order.pk, "item_id": item.pk, "number": order.number,
                     "customer": order.customer.name, "department": order.department.name,
                     "product": item.product.name, "product_id": item.product_id,
@@ -791,10 +892,13 @@ def orders_api(request):
                     "machine": item.equipment.name if item.equipment else "", "cnc_program": item.cnc_program,
                     "one_c_code": item.one_c_code,
                     "start_date": order.start_date.isoformat(), "due_date": order.due_date.isoformat(),
+                    "registration_date": order.registration_date.isoformat() if order.registration_date else "",
+                    "request_date": order.request_date.isoformat() if order.request_date else "",
                     "priority": order.priority, "status": order.get_status_display(),
                     "progress": order.progress, "request_number": order.request_number,
                     "note": order.note, "norm_per_item": str(planned_hours / item.quantity),
-                    "planned_hours": str(planned_hours), "actual_hours": str(actual_hours)})
+                    "planned_hours": str(planned_hours), "actual_hours": str(actual_hours),
+                    "executors": ", ".join(number for number in executors if number)})
         return JsonResponse({"orders": result})
     if role(request.user) not in ("admin", "technologist", "manager") and not request.user.is_superuser:
         raise PermissionDenied
@@ -816,6 +920,8 @@ def orders_api(request):
                 raise ValueError("Сначала добавьте подразделение")
             order = Order(number=number, customer=customer, department=department,
                 request_number=str(data.get("request_number", "")), start_date=start,
+                registration_date=date.fromisoformat(data["registration_date"]) if data.get("registration_date") else None,
+                request_date=date.fromisoformat(data["request_date"]) if data.get("request_date") else None,
                 due_date=due, priority=int(data.get("priority") or 2), status="draft",
                 note=str(data.get("note", "")))
             order.full_clean()
@@ -859,16 +965,20 @@ def orders_api(request):
 def table_api(request, key):
     if key not in TABLES:
         raise Http404
-    if role(request.user) not in TABLE_ROLES[key] and not request.user.is_superuser:
+    can_read_personnel = request.method == "GET" and key == "personnel" and role(request.user) == "planner"
+    if role(request.user) not in TABLE_ROLES[key] and not request.user.is_superuser and not can_read_personnel:
         raise PermissionDenied
     if request.method == "GET":
         if key == "operations":
-            return JsonResponse({"rows": legacy_tables.operations_rows()})
+            return JsonResponse({"rows": legacy_tables.operations_rows(
+                include_inactive=request.GET.get("include_inactive") == "1")})
         if key == "personnel":
             return JsonResponse({"rows": legacy_tables.personnel_rows()})
         if key == "timesheet":
             return JsonResponse({"rows": legacy_tables.timesheet_rows(
-                legacy_tables.month_from_text(request.GET.get("month")))})
+                legacy_tables.month_from_text(request.GET.get("month"))),
+                "departments": {employee.personnel_number or str(employee.pk).zfill(3): employee.department.name
+                    for employee in Employee.objects.select_related("department").filter(archived=False)}})
         saved = LegacyTable.objects.filter(key=key).first()
         if saved and key != "materials1c":
             rows = [row[:8] for row in saved.rows] if key == "operations" else saved.rows
@@ -950,6 +1060,10 @@ def order_api(request, pk):
                 if data.get("priority"):
                     order.priority = int(data["priority"])
                 order.request_number = str(data.get("request_number", order.request_number))
+                if "registration_date" in data:
+                    order.registration_date = date.fromisoformat(data["registration_date"]) if data["registration_date"] else None
+                if "request_date" in data:
+                    order.request_date = date.fromisoformat(data["request_date"]) if data["request_date"] else None
                 order.note = str(data.get("note", order.note))
                 if data.get("customer"):
                     order.customer, _ = Customer.objects.get_or_create(name=str(data["customer"]).strip())

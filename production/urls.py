@@ -45,6 +45,7 @@ urlpatterns = [
     path("api/admin/users/", legacy_ui.users_api, name="legacy_users_api"),
     path("api/admin/users/<int:pk>/", legacy_ui.user_api, name="legacy_user_api"),
     path("api/legacy/plans/", legacy_ui.plans_api, name="legacy_plans_api"),
+    path("api/legacy/norming/", legacy_ui.norming_api, name="legacy_norming_api"),
     path("api/legacy/report/", legacy_ui.report_api, name="legacy_report_api"),
     path("api/legacy/report/export/", legacy_ui.report_export_api, name="legacy_report_export_api"),
     path("api/legacy/materials/", legacy_ui.materials_api, name="legacy_materials_api"),

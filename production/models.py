@@ -186,6 +186,8 @@ class Order(models.Model):
     customer = models.ForeignKey(Customer, on_delete=models.PROTECT, verbose_name="Заказчик")
     department = models.ForeignKey(Department, on_delete=models.PROTECT, verbose_name="Подразделение")
     request_number = models.CharField("Номер заявки", max_length=80, blank=True)
+    registration_date = models.DateField("Дата регистрации", null=True, blank=True)
+    request_date = models.DateField("Дата заявки", null=True, blank=True)
     start_date = models.DateField("Плановый запуск")
     due_date = models.DateField("Плановый выпуск")
     priority = models.PositiveSmallIntegerField("Приоритет", default=2)
@@ -342,6 +344,27 @@ class ProgramLine(models.Model):
     def clean(self):
         if self.order_item_id and self.quantity > self.order_item.quantity:
             raise ValidationError("Объем программы превышает количество в заказе.")
+
+
+class NormingApproval(models.Model):
+    """Утверждённый снимок расчёта трудоёмкости за квартал."""
+
+    year = models.PositiveSmallIntegerField("Год")
+    quarter = models.PositiveSmallIntegerField("Квартал")
+    drawing_count = models.PositiveIntegerField("Количество чертежей")
+    hours_per_employee = models.DecimalField("Часов на сотрудника", max_digits=9, decimal_places=2)
+    labor_factor = models.DecimalField("Коэффициент трудоёмкости", max_digits=7, decimal_places=3)
+    staff_count = models.PositiveIntegerField("Численность")
+    planned_hours = models.DecimalField("Плановая трудоёмкость, ч", max_digits=12, decimal_places=2)
+    actual_hours = models.DecimalField("Фактическая трудоёмкость, ч", max_digits=12, decimal_places=2)
+    capacity_hours = models.DecimalField("Располагаемый фонд, ч", max_digits=12, decimal_places=2)
+    approved_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    approved_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Утверждённое нормирование"
+        verbose_name_plural = "Утверждённое нормирование"
+        constraints = [models.UniqueConstraint(fields=["year", "quarter"], name="unique_norming_period")]
 
 
 class Job(models.Model):

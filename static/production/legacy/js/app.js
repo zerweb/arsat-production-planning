@@ -454,10 +454,10 @@ const pageViews = {
         <header class="order-entry-title"><span>Введение нового заказа</span><time>22.08.2026</time></header>
         <div class="order-entry-main">
           <label>Номер заказа <b>*</b><input data-entry="order" required></label>
-          <label>Дата регистрации <input type="date" value="2026-08-22"></label>
+          <label>Дата регистрации <input data-entry="registration-date" type="date" required></label>
           <label>Объект <b>*</b><select data-entry="object" required><option value="">Выберите объект</option><option>ОРМ</option><option>РИК</option><option>ВК-50</option><option>ОЭС</option><option>ХТО</option></select></label>
           <label>Номер заявки <input data-entry="request"></label>
-          <label>Дата заявки <input type="date" value="2026-08-22"></label>
+          <label>Дата заявки <input data-entry="request-date" type="date"></label>
         </div>
 
         <h2 class="entry-section-title">Список изделий</h2>
@@ -1138,7 +1138,7 @@ const pageViews = {
 
       <div class="toolbar">
         <button class="btn" data-action="edit-order">Изменить изделие</button>
-        <button class="btn">Фильтровать...</button>
+        <button class="btn" data-action="filter-orders">Фильтровать...</button>
         <label style="margin-left:12px">
           Поиск заказа № <input id="order-search" style="width:75px">
         </label>
@@ -1668,13 +1668,13 @@ const pageViews = {
     </div>
         </div>
         <aside class="side-panel">
-          <button class="btn">Все заказы</button>
-          <button class="btn">Тех. Бюро</button>
-          <button class="btn">БИХ</button>
+          <button class="btn" data-action="production-all">Все заказы</button>
+          <button class="btn" data-action="production-department" data-department="Тех. Бюро">Тех. Бюро</button>
+          <button class="btn" data-action="production-department" data-department="БИХ">БИХ</button>
           <fieldset>
             <legend>Производство</legend>
-            Начало <input class="field" type="date" value="2016-05-25"><br><br>
-            Окончание <input class="field" type="date"><br><br>
+            Начало <input class="field" data-production-date="start" type="date"><br><br>
+            Окончание <input class="field" data-production-date="end" type="date"><br><br>
             <button class="btn" data-action="edit-order">Изменить изделие</button>
           </fieldset>
         </aside>
@@ -1777,7 +1777,7 @@ const pageViews = {
 
       <div class="toolbar">
         <button class="btn" data-action="add-order">Добавить изделие</button><button class="btn" data-action="edit-order">Редактирование изделия</button><button class="btn" data-action="delete-order">Удалить изделие</button>
-        <button class="btn">Фильтровать...</button>
+        <button class="btn" data-action="filter-orders">Фильтровать...</button>
         <label style="margin-left:12px">
           Поиск заказа № <input id="order-search" style="width:75px">
         </label>
@@ -1964,6 +1964,13 @@ const pageViews = {
           <option value="balance">Остатки работ Плана Б</option>
           <option value="production">Производство заказа</option>
         </select>
+        <div class="report-filter-fields">
+          <label>Заказ <input data-report-filter="order" type="search" placeholder="Номер заказа"></label>
+          <label>Изделие <input data-report-filter="product" type="search" placeholder="Наименование"></label>
+          <label>Подразделение <input data-report-filter="department" type="search" placeholder="Подразделение"></label>
+          <label>Срок с <input data-report-filter="from" type="date"></label>
+          <label>по <input data-report-filter="to" type="date"></label>
+        </div>
         <div class="report-picker-actions">
           <button class="primary-button" data-action="show-selected-report">Обновить таблицу</button>
           <button class="ghost-button" data-action="download-all-reports">Скачать все</button>
@@ -2357,20 +2364,21 @@ const pageViews = {
       <div class="filters standards-filters">
         <fieldset>
           <legend>Период</legend>
-          Год <select><option>2026</option></select>
-          Квартал <select><option>3</option></select>
+          Год <select data-norming="year"></select>
+          Квартал <select data-norming="quarter"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option></select>
         </fieldset>
         <fieldset class="technology-office">
           <legend>Технологическое бюро</legend>
-          <label>Чертежей <input class="field" value="4"></label>
-          <label>Часов <input class="field" value="128"></label>
-          <label>Трудоёмкость <input class="field" value="1"></label>
-          <label>Численность <input class="field" value="4"></label>
-          <button class="btn">Предварительное формирование</button>
-          <button class="btn">Очистить</button>
-          <button class="btn primary-inline">Утвердить</button>
+          <label>Чертежей <input class="field" data-norming="drawings" type="number" min="0" value="0" readonly></label>
+          <label>Часов <input class="field" data-norming="hours" type="number" min="0.01" step="0.01" value="128"></label>
+          <label>Трудоёмкость <input class="field" data-norming="factor" type="number" min="0.001" step="0.001" value="1"></label>
+          <label>Численность <input class="field" data-norming="staff" type="number" min="1" step="1" value="4"></label>
+          <button class="btn" data-action="norming-preview">Предварительное формирование</button>
+          <button class="btn" data-action="norming-clear">Очистить</button>
+          <button class="btn primary-inline" data-action="norming-approve">Утвердить</button>
         </fieldset>
       </div>
+      <p class="norming-result" id="norming-result" role="status"></p>
 
     <div class="table-wrap">
       <table class="data-grid">
@@ -2552,26 +2560,26 @@ const currentName = sessionStorage.getItem('oecFullName') || currentUser;
 
 const pageRoles = {
   admin: ['admin'],
-  'annual-plan': ['admin', 'manager'],
-  'plan-a': ['admin', 'manager'],
-  'plan-b': ['admin', 'manager'],
+  'annual-plan': ['admin', 'manager', 'planner'],
+  'plan-a': ['admin', 'manager', 'planner'],
+  'plan-b': ['admin', 'manager', 'planner'],
   entry: ['admin', 'technologist'],
   materials: ['admin', 'technologist'],
   settings: ['admin', 'technologist'],
   cam: ['admin', 'technologist'],
-  standards: ['admin', 'normalizer'],
-  form2: ['admin', 'manager', 'normalizer'],
-  production: ['admin', 'manager'],
-  reports: ['admin', 'manager', 'normalizer'],
-  processes: ['admin', 'manager', 'technologist'],
-  personnel: ['admin', 'manager'],
+  standards: ['admin', 'normalizer', 'economist'],
+  form2: ['admin', 'manager', 'planner', 'supervisor', 'normalizer', 'economist'],
+  production: ['admin', 'manager', 'planner', 'supervisor'],
+  reports: ['admin', 'manager', 'planner', 'supervisor', 'normalizer', 'economist'],
+  processes: ['admin', 'manager', 'planner', 'supervisor', 'technologist'],
+  personnel: ['admin', 'manager', 'planner', 'supervisor'],
   operations: ['admin', 'technologist'],
-  timesheet: ['admin', 'manager', 'normalizer'],
+  timesheet: ['admin', 'manager', 'planner', 'supervisor', 'normalizer', 'economist'],
   'materials-1c': ['admin', 'technologist'],
-  orders: ['admin', 'manager', 'technologist', 'normalizer'],
-  products: ['admin', 'manager', 'technologist', 'normalizer'],
-  help: ['admin', 'manager', 'technologist', 'normalizer'],
-  home: ['admin', 'manager', 'technologist', 'normalizer']
+  orders: ['admin', 'manager', 'planner', 'supervisor', 'technologist', 'normalizer', 'economist'],
+  products: ['admin', 'manager', 'planner', 'supervisor', 'technologist', 'normalizer', 'economist'],
+  help: ['admin', 'manager', 'planner', 'supervisor', 'technologist', 'normalizer', 'economist'],
+  home: ['admin', 'manager', 'planner', 'supervisor', 'technologist', 'normalizer', 'economist']
 };
 
 const pageFiles = {
@@ -2616,21 +2624,21 @@ const actionRoles = {
   'delete-user': ['admin'],
   'edit-server': ['admin'],
   'test-server': ['admin'],
-  'add-order': ['admin', 'technologist'],
-  'edit-order': ['admin', 'technologist'],
-  'delete-order': ['admin', 'technologist'],
-  'save-order': ['admin', 'technologist'],
+  'add-order': ['admin', 'technologist', 'manager'],
+  'edit-order': ['admin', 'technologist', 'manager'],
+  'delete-order': ['admin', 'technologist', 'manager'],
+  'save-order': ['admin', 'technologist', 'manager'],
   'save-order-new': ['admin', 'technologist'],
   'save-order-exit': ['admin', 'technologist'],
   'clear-entry': ['admin', 'technologist'],
-  'new-process': ['admin', 'technologist'],
-  'edit-process': ['admin', 'technologist'],
-  'delete-process': ['admin', 'technologist'],
-  'add-deviation': ['admin', 'manager', 'normalizer'],
-  'edit-deviation': ['admin', 'manager', 'normalizer'],
-  'delete-deviation': ['admin', 'manager', 'normalizer'],
-  'approve-process': ['admin', 'manager'],
-  'calculate-material': ['admin', 'technologist', 'normalizer']
+  'new-process': ['admin', 'technologist', 'manager'],
+  'edit-process': ['admin', 'technologist', 'manager'],
+  'delete-process': ['admin', 'technologist', 'manager'],
+  'add-deviation': ['admin', 'manager', 'supervisor', 'normalizer'],
+  'edit-deviation': ['admin', 'manager', 'supervisor', 'normalizer'],
+  'delete-deviation': ['admin', 'manager', 'supervisor', 'normalizer'],
+  'approve-process': ['admin', 'manager', 'technologist'],
+  'calculate-material': ['admin', 'technologist']
 };
 
 function canRun(action) {
@@ -2993,10 +3001,24 @@ function recalculateTimesheetRow(row) {
 
 function setModuleRowEditing(row, editing) {
   if (!row) return;
+  const hiredCell = row.closest('[data-module-store="personnel"]') ? row.cells[6] : null;
+  if (!editing && hiredCell?.querySelector('input[type="date"]')) {
+    const value = hiredCell.querySelector('input').value;
+    hiredCell.textContent = value ? value.split('-').reverse().join('.') : '';
+  }
   row.dataset.editing = String(editing);
   [...row.cells].forEach((cell) => {
-    cell.contentEditable = String(editing);
+    cell.contentEditable = String(editing && cell !== hiredCell);
   });
+  if (editing && hiredCell) {
+    const value = hiredCell.textContent.trim();
+    const match = value.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+    const input = document.createElement('input');
+    input.type = 'date';
+    input.setAttribute('aria-label', 'Дата приёма');
+    input.value = match ? `${match[3]}-${match[2]}-${match[1]}` : '';
+    hiredCell.replaceChildren(input);
+  }
   if (editing) row.cells[0]?.focus();
 }
 
