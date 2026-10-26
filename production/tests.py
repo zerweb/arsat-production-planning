@@ -939,6 +939,10 @@ class SampleImportTests(TestCase):
         admin = User.objects.get(username="admin")
         self.assertTrue(admin.is_active and admin.is_superuser)
         self.assertTrue(admin.check_password("A-new-long-random-password-2026"))
+        with patch.dict("os.environ", {"AVT_ADMIN_PASSWORD": "A-different-long-random-password"}):
+            call_command("provision_admin", verbosity=0)
+        admin.refresh_from_db()
+        self.assertTrue(admin.check_password("A-new-long-random-password-2026"))
 
 
 class ReleaseSurfaceTests(TestCase):

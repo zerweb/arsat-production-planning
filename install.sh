@@ -132,6 +132,9 @@ if ! "$PROJECT_ROOT/.venv/bin/python" manage.py shell -c 'from django.contrib.au
 fi
 "$PROJECT_ROOT/.venv/bin/python" manage.py check --deploy
 "$PROJECT_ROOT/.venv/bin/python" manage.py collectstatic --noinput --verbosity 0
+# Команды миграции выполнялись от root и могли создать app.log с правами 600.
+# Перед запуском службы передаём служебные файлы её отдельному пользователю.
+chown -R www-data:www-data "$PROJECT_ROOT/.runtime" "$PROJECT_ROOT/.backups"
 find "$PROJECT_ROOT/staticfiles" -type d -exec chmod 755 {} +
 find "$PROJECT_ROOT/staticfiles" -type f -exec chmod 644 {} +
 
