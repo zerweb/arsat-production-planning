@@ -1,0 +1,16 @@
+.env
+.pgdata/
+.pgadmin
+.runtime/
+.backups/
+__pycache__/
+*.py[cod]
+staticfiles/
+.venv/
+artifacts/
+output/
+tmp/
+*.sql
+*.dump
+*.log
+install_credentials.txt

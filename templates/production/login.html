@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Авторизация</title><link rel="icon" type="image/svg+xml" href="/static/production/legacy/assets/favicon.svg"><link rel="stylesheet" href="/static/production/legacy/css/style.css"></head>
+<body class="login-page">
+  <div class="login-watermark" aria-hidden="true"><span></span><span></span><span></span><i></i></div>
+  <main class="login-window modern-login"><header class="login-brand"><img class="login-rosatom-logo" src="/static/production/legacy/assets/rosatom-logo.svg" alt="Росатом"></header>
+    <form id="login-form" class="login-form" method="post">{% csrf_token %}<div class="login-intro"><h1>Вход в систему</h1></div>
+      <label for="server">Сервер</label><input id="server" value="{{ request.get_host }}" readonly>
+      <label for="username">Логин</label><input id="username" name="username" autocomplete="username" placeholder="Введите логин" required>
+      <label for="password">Пароль</label><input id="password" name="password" type="password" autocomplete="current-password" placeholder="Введите пароль" required>
+      <div class="login-actions"><button type="submit" class="btn">Войти</button><button type="reset" id="close-login" class="btn">Очистить</button></div>
+      <p id="login-message" class="login-message" aria-live="polite">{% if form.non_field_errors %}{{ form.non_field_errors|striptags }}{% else %}Введите логин и пароль{% endif %}</p>
+    </form>
+  </main>
+</body></html>

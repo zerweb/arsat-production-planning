@@ -1,0 +1,158 @@
+[
+  {
+    "model": "auth.group",
+    "pk": 1,
+    "fields": {
+      "name": "admin",
+      "permissions": []
+    }
+  },
+  {
+    "model": "auth.group",
+    "pk": 2,
+    "fields": {
+      "name": "manager",
+      "permissions": []
+    }
+  },
+  {
+    "model": "auth.group",
+    "pk": 3,
+    "fields": {
+      "name": "planner",
+      "permissions": []
+    }
+  },
+  {
+    "model": "auth.group",
+    "pk": 4,
+    "fields": {
+      "name": "technologist",
+      "permissions": []
+    }
+  },
+  {
+    "model": "auth.group",
+    "pk": 5,
+    "fields": {
+      "name": "normalizer",
+      "permissions": []
+    }
+  },
+  {
+    "model": "auth.group",
+    "pk": 6,
+    "fields": {
+      "name": "supervisor",
+      "permissions": []
+    }
+  },
+  {
+    "model": "auth.group",
+    "pk": 7,
+    "fields": {
+      "name": "economist",
+      "permissions": []
+    }
+  },
+  {
+    "model": "auth.user",
+    "pk": 1,
+    "fields": {
+      "password": "!",
+      "last_login": null,
+      "is_superuser": false,
+      "username": "admin",
+      "first_name": "Администратор",
+      "last_name": "системы",
+      "email": "",
+      "is_staff": false,
+      "is_active": false,
+      "date_joined": "2026-10-01T00:00:00Z",
+      "groups": [
+        1
+      ],
+      "user_permissions": []
+    }
+  },
+  {
+    "model": "auth.user",
+    "pk": 2,
+    "fields": {
+      "password": "!",
+      "last_login": null,
+      "is_superuser": false,
+      "username": "user",
+      "first_name": "Инженер",
+      "last_name": "технолог",
+      "email": "",
+      "is_staff": false,
+      "is_active": false,
+      "date_joined": "2026-10-01T00:00:00Z",
+      "groups": [
+        4
+      ],
+      "user_permissions": []
+    }
+  },
+  {
+    "model": "auth.user",
+    "pk": 3,
+    "fields": {
+      "password": "!",
+      "last_login": null,
+      "is_superuser": false,
+      "username": "planner",
+      "first_name": "Специалист",
+      "last_name": "по планированию",
+      "email": "",
+      "is_staff": false,
+      "is_active": false,
+      "date_joined": "2026-10-01T00:00:00Z",
+      "groups": [
+        3
+      ],
+      "user_permissions": []
+    }
+  },
+  {
+    "model": "auth.user",
+    "pk": 4,
+    "fields": {
+      "password": "!",
+      "last_login": null,
+      "is_superuser": false,
+      "username": "manager",
+      "first_name": "Начальник",
+      "last_name": "производства",
+      "email": "",
+      "is_staff": false,
+      "is_active": false,
+      "date_joined": "2026-10-01T00:00:00Z",
+      "groups": [
+        2
+      ],
+      "user_permissions": []
+    }
+  },
+  {
+    "model": "auth.user",
+    "pk": 5,
+    "fields": {
+      "password": "!",
+      "last_login": null,
+      "is_superuser": false,
+      "username": "supervisor",
+      "first_name": "Начальник",
+      "last_name": "участка",
+      "email": "",
+      "is_staff": false,
+      "is_active": false,
+      "date_joined": "2026-10-01T00:00:00Z",
+      "groups": [
+        6
+      ],
+      "user_permissions": []
+    }
+  }
+]

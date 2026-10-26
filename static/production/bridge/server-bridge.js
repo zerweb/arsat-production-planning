@@ -1,0 +1,1175 @@
+/* Connect the original interface to the Django session and PostgreSQL API. */
+const csrfToken = () => decodeURIComponent(document.cookie.match(/(?:^|; )csrftoken=([^;]+)/)?.[1] || '');
+const apiHeaders = () => ({ 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken() });
+
+function installTppFields() {
+  const main = document.querySelector('.order-entry-main');
+  const options = document.querySelector('.order-entry-options');
+  if (main && options) {
+    main.insertAdjacentHTML('beforeend', '<label>Плановый запуск <input data-entry="start-date" type="date" required></label><label>Плановый выпуск <input data-entry="due-date" type="date" required></label>');
+    const priority = [...options.querySelectorAll('label')].find(label => label.textContent.includes('Приоритет'));
+    const prioritySelect = priority?.querySelector('select');
+    if (prioritySelect) {
+      prioritySelect.dataset.entry = 'priority';
+      [...prioritySelect.options].forEach((option, index) => { option.value = String(index === 0 ? 2 : 1); });
+    }
+  }
+  const deviationForm = document.querySelector('.deviation-form-grid');
+  if (deviationForm) {
+    const hours = document.createElement('label');
+    hours.innerHTML = '<span>Часы</span><input class="field" data-deviation-field="hours" type="number" min="0.01" step="0.01" value="8">';
+    deviationForm.querySelector('[data-deviation-field="date"]')?.closest('label')?.after(hours);
+  }
+}
+
+function connectTppTables() {
+  const tableEndpoint = table => {
+    const base = `/api/legacy/table/${encodeURIComponent(table.dataset.moduleStore)}/`;
+    if (table.dataset.moduleStore !== 'timesheet') return base;
+    const month = document.querySelector('.module-filters input[type="month"]')?.value || '';
+    return `${base}?month=${encodeURIComponent(month)}`;
+  };
+  window.saveModuleTable = async function(table) {
+    if (table.tBodies[0].querySelector('tr[data-editing="true"]')) return;
+    const rows = [...table.tBodies[0].rows].map(row => [...row.cells].map(cell => cell.textContent.trim()));
+    const endpoint = tableEndpoint(table);
+    try {
+      const response = await fetch(endpoint, {
+        method: 'PUT', headers: apiHeaders(), body: JSON.stringify({ rows })
+      });
+      if (!response.ok) {
+        const result = await response.json();
+        throw new Error(result.error || 'Не удалось сохранить таблицу');
+      }
+      const saved = await fetch(endpoint);
+      if (saved.ok) renderModuleTable(table, (await saved.json()).rows);
+    } catch (error) {
+      legacyNotice(error.message, true);
+      const saved = await fetch(endpoint);
+      if (saved.ok) renderModuleTable(table, (await saved.json()).rows);
+    }
+  };
+  document.querySelectorAll('[data-module-store]').forEach(table => {
+    fetch(tableEndpoint(table))
+      .then(response => response.ok ? response.json() : null)
+      .then(data => { if (Array.isArray(data?.rows)) renderModuleTable(table, data.rows); if (typeof updateOneCCount === 'function') updateOneCCount(); })
+      .catch(error => legacyNotice(error.message, true));
+  });
+  document.querySelector('.timesheet-table')?.closest('.module-table-card')
+    ?.querySelector('input[type="month"]')?.addEventListener('change', event => {
+      const table = document.querySelector('.timesheet-table');
+      fetch(tableEndpoint(table)).then(response => response.json())
+        .then(data => renderModuleTable(table, data.rows))
+        .catch(error => legacyNotice(error.message, true));
+      const month = event.target.value;
+      const heading = table.closest('.module-table-card')?.querySelector('.card-heading h3');
+      if (heading && month) heading.textContent = new Intl.DateTimeFormat('ru-RU', { month: 'long', year: 'numeric' }).format(new Date(`${month}-01T12:00:00`));
+    });
+}
+
+function connectSettings() {
+  const lists = document.querySelectorAll('[data-settings-list]');
+  if (!lists.length) return;
+  const save = (key, rows) => fetch(`/api/legacy/table/${key}/`, {
+    method: 'PUT', headers: apiHeaders(), body: JSON.stringify({ rows })
+  }).then(response => { if (!response.ok) throw new Error('Не удалось сохранить настройки'); })
+    .catch(error => { legacyNotice(error.message, true); return false; });
+  window.saveSettingsList = list => save(`settings-${list.dataset.settingsList}`,
+    [...list.querySelectorAll('button')].map(button => [button.textContent.trim()]));
+  window.savePlanPeriods = table => save('settings-periods',
+    [...table.tBodies[0].rows].map(row => [...row.cells].map(cell => cell.textContent.trim())));
+  const columnPanel = document.querySelector('[data-settings-panel="tables"]');
+  const columnRows = () => [...columnPanel.querySelectorAll('section')].flatMap((section, group) =>
+    [...section.querySelectorAll('label')].map(label => [String(group), label.textContent.trim(), label.querySelector('input').checked]));
+  window.saveSettingsColumns = () => save('settings-columns', columnRows());
+  fetch('/api/legacy/table/settings-columns/')
+    .then(response => response.ok ? response.json() : null)
+    .then(data => {
+      if (!data?.rows?.length) return;
+      const saved = new Map(data.rows.map(row => [`${row[0]}:${row[1]}`, row[2]]));
+      [...columnPanel.querySelectorAll('section')].forEach((section, group) =>
+        section.querySelectorAll('label').forEach(label => {
+          const key = `${group}:${label.textContent.trim()}`;
+          if (saved.has(key)) label.querySelector('input').checked = saved.get(key) === true;
+        }));
+    }).catch(error => legacyNotice(error.message, true));
+  const planInputs = [...document.querySelectorAll('[data-settings-panel="plan"] fieldset input')];
+  window.saveSettingsPlanInputs = () => {
+    if (planInputs.some(input => !Number.isInteger(Number(input.value)) || Number(input.value) < 0)) {
+      legacyNotice('Параметры плана должны быть целыми неотрицательными числами', true);
+      return Promise.resolve(false);
+    }
+    return save('settings-plan-inputs', planInputs.map((input, index) => [String(index), input.value]));
+  };
+  fetch('/api/legacy/table/settings-plan-inputs/')
+    .then(response => response.ok ? response.json() : null)
+    .then(data => data?.rows?.forEach(row => { if (planInputs[Number(row[0])]) planInputs[Number(row[0])].value = row[1]; }))
+    .catch(error => legacyNotice(error.message, true));
+  lists.forEach(list => fetch(`/api/legacy/table/settings-${list.dataset.settingsList}/`)
+    .then(response => response.ok ? response.json() : null)
+    .then(data => { if (data?.rows?.length) renderSettingsList(list, data.rows.map(row => row[0])); })
+    .catch(error => legacyNotice(error.message, true)));
+  const periods = document.querySelector('.settings-quarter-table table');
+  if (periods) fetch('/api/legacy/table/settings-periods/')
+    .then(response => response.ok ? response.json() : null)
+    .then(data => { if (data?.rows?.length) renderPlanPeriods(periods, data.rows); })
+    .catch(error => legacyNotice(error.message, true));
+}
+
+function connectMaterialCalculator() {
+  if (document.body.dataset.page !== 'materials') return;
+  window.calculateMaterial = function() {
+    const material = document.querySelector('#material-type');
+    const shape = document.querySelectorAll('.calculator-card .modern-form-grid select')[1];
+    const density = [7850, 2640, 4430][material?.selectedIndex || 0];
+    const widthOrDiameter = Number(document.querySelector('#blank-diameter')?.value);
+    const length = Number(document.querySelector('#blank-length')?.value);
+    const count = Number(document.querySelector('#blank-count')?.value);
+    const partWeight = Number(document.querySelector('#part-weight')?.value);
+    if (![widthOrDiameter, length, count, partWeight].every(value => Number.isFinite(value) && value > 0)) {
+      legacyNotice('Введите положительные размеры, количество и массу детали', true); return;
+    }
+    let volume;
+    if (shape?.selectedIndex === 1) {
+      const thickness = Number(prompt('Толщина листа, мм:', '12'));
+      if (!Number.isFinite(thickness) || thickness <= 0) {
+        legacyNotice('Укажите положительную толщину листа', true); return;
+      }
+      volume = widthOrDiameter * length * thickness / 1e9;
+    } else {
+      volume = Math.PI * (widthOrDiameter / 2000) ** 2 * (length / 1000);
+    }
+    const blankWeight = volume * density;
+    if (partWeight > blankWeight) { legacyNotice('Масса детали больше массы заготовки', true); return; }
+    const total = blankWeight * count;
+    const ratio = partWeight / blankWeight;
+    const waste = total - partWeight * count;
+    document.querySelector('#material-total').textContent = total.toFixed(1).replace('.', ',');
+    document.querySelector('#blank-weight').firstChild.textContent = blankWeight.toFixed(2).replace('.', ',');
+    document.querySelector('#kim-value').textContent = ratio.toFixed(3).replace('.', ',');
+    document.querySelector('#waste-value').firstChild.textContent = waste.toFixed(1).replace('.', ',');
+    document.querySelector('#kim-progress').style.width = `${Math.min(ratio * 100, 100)}%`;
+  };
+}
+
+async function loadMaterialsFromServer() {
+  if (document.body.dataset.page !== 'materials') return;
+  const response = await fetch('/api/legacy/materials/');
+  if (!response.ok) throw new Error('Не удалось загрузить справочник материалов');
+  const { materials } = await response.json();
+  const table = document.querySelector('.calculator-grid + .content-card table');
+  if (!table) return;
+  const headers = ['Материал', 'Код', 'Ед.', 'Остаток', 'Доступно'];
+  const heading = table.tHead?.rows[0];
+  if (heading) { heading.replaceChildren(); headers.forEach(value => {
+    const cell = document.createElement('th'); cell.textContent = value; heading.append(cell);
+  }); }
+  const body = table.tBodies[0];
+  body.replaceChildren();
+  materials.forEach(item => {
+    const row = body.insertRow();
+    [item.name, item.code, item.unit, item.stock, item.available].forEach(value => row.insertCell().textContent = value);
+  });
+}
+
+async function loadDashboardFromServer() {
+  if (document.body.dataset.page !== 'home') return;
+  const response = await fetch('/api/legacy/dashboard/');
+  if (!response.ok) throw new Error('Не удалось загрузить показатели главной страницы');
+  const data = await response.json();
+  const greeting = document.querySelector('.welcome-message');
+  if (greeting) greeting.textContent = `Добрый день, ${sessionStorage.getItem('oecFullName') || 'пользователь'}`;
+  const readiness = document.querySelector('.hero-stat strong');
+  if (readiness) readiness.textContent = `${data.readiness}%`;
+  const progress = document.querySelector('.hero-stat .progress i');
+  if (progress) progress.style.width = `${data.readiness}%`;
+  const total = document.querySelector('.hero-stat small');
+  if (total) total.textContent = `${data.quantity} изделий в ${data.orders} заказах`;
+  [data.workplaces, data.technologists, data.normalizers, data.managers].forEach((value, index) => {
+    const node = document.querySelectorAll('.metric-grid .metric-card strong')[index];
+    if (node) node.textContent = value;
+  });
+}
+
+function legacyNotice(message, error = false) {
+  const node = document.createElement('div');
+  node.className = 'server-toast' + (error ? ' error' : '');
+  node.textContent = message;
+  document.body.append(node);
+  setTimeout(() => node.remove(), 4000);
+}
+
+function legacyDate(value) {
+  if (!value) return '';
+  const parts = value.split('-');
+  return parts.length === 3 ? `${parts[2]}.${parts[1]}.${parts[0]}` : value;
+}
+
+function isoDate(value) {
+  const match = String(value || '').trim().match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+  return match ? `${match[3]}-${match[2]}-${match[1]}` : value;
+}
+
+let serverUsers = [];
+
+async function loadDatabaseStatus() {
+  const badge = document.querySelector('.server-admin-card .status-pill');
+  if (badge) { badge.textContent = 'Проверка…'; badge.classList.remove('success'); }
+  try {
+    const response = await fetch('/api/admin/database/');
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || 'PostgreSQL недоступна');
+    document.querySelectorAll('[data-server-value]').forEach(node => { node.textContent = data[node.dataset.serverValue] || ''; });
+    const form = document.querySelector('#server-form');
+    if (form) for (const name of ['host', 'port', 'database', 'username']) form.elements[name].value = data[name] || '';
+    if (badge) { badge.textContent = 'Подключено'; badge.classList.add('success'); }
+    legacyNotice('Подключение к PostgreSQL проверено');
+  } catch (error) {
+    if (badge) badge.textContent = 'Нет подключения';
+    legacyNotice(error.message, true);
+  }
+}
+
+function installDatabaseAdmin() {
+  if (document.body.dataset.page !== 'admin') return;
+  const form = document.querySelector('#server-form');
+  if (form) {
+    form.elements.password.required = false;
+    form.elements.password.closest('label')?.classList.remove('required');
+    form.elements.password.closest('label')?.querySelector('span')?.replaceChildren(document.createTextNode('Новый пароль (если меняется)'));
+    form.addEventListener('submit', async event => {
+      event.preventDefault(); event.stopImmediatePropagation();
+      const payload = Object.fromEntries(new FormData(form).entries());
+      try {
+        const response = await fetch('/api/admin/database/config/', {
+          method: 'POST', headers: apiHeaders(), body: JSON.stringify(payload)
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Не удалось сохранить параметры PostgreSQL');
+        document.querySelector('#server-dialog')?.close();
+        form.elements.password.value = '';
+        legacyNotice(result.message);
+        if (result.restart) setTimeout(() => location.reload(), 3500);
+        else await loadDatabaseStatus();
+      } catch (error) { legacyNotice(error.message, true); }
+    }, true);
+  }
+  const summary = document.querySelector('.admin-summary-grid');
+  if (summary) {
+    summary.insertAdjacentHTML('afterend', '<div class="backup-launch"><button type="button" class="ghost-button" data-action="backup-open">Резервные копии PostgreSQL</button></div>');
+    document.body.insertAdjacentHTML('beforeend', `<dialog id="database-backup-dialog" class="backup-dialog" aria-labelledby="backup-dialog-title">
+      <section class="content-card backup-admin-card">
+        <div class="card-heading"><div><span class="eyebrow">Резервное копирование</span><h3 id="backup-dialog-title">Экспорт и импорт базы данных</h3></div>
+          <button type="button" class="ghost-button" data-action="backup-close" aria-label="Закрыть окно">Закрыть</button></div>
+        <div class="row-actions backup-actions"><button type="button" class="ghost-button" data-action="backup-create">Создать SQL на сервере</button>
+          <button type="button" class="ghost-button" data-action="backup-export">Скачать SQL</button>
+          <button type="button" class="ghost-button" data-action="backup-export-archive">Скачать архив .dump</button></div>
+        <div class="row-actions backup-actions"><input id="restore-dump-file" class="backup-file-input" type="file" accept=".dump,application/octet-stream" aria-label="Архив PostgreSQL для восстановления">
+          <button type="button" class="ghost-button" data-action="backup-restore">Восстановить архив .dump</button></div>
+        <p class="backup-help">SQL-копия доступна для просмотра. Для восстановления через приложение используйте архив .dump.</p>
+        <p id="restore-status" role="status"></p><div id="server-backup-list" class="backup-list"></div>
+      </section></dialog>`);
+  }
+  loadRestoreStatus();
+  loadBackups().catch(error => legacyNotice(error.message, true));
+}
+
+async function loadBackups() {
+  const target = document.querySelector('#server-backup-list');
+  if (!target) return;
+  const response = await fetch('/api/admin/backup/');
+  if (!response.ok) throw new Error('Не удалось загрузить список резервных копий');
+  const { backups } = await response.json();
+  target.replaceChildren();
+  if (!backups.length) { target.textContent = 'Резервных копий на сервере пока нет'; return; }
+  backups.forEach(item => {
+    const row = document.createElement('p');
+    const link = document.createElement('a');
+    link.href = `/api/admin/backup/${encodeURIComponent(item.name)}/`;
+    link.textContent = `${item.created} · ${item.name} · ${(item.bytes / 1024).toFixed(0)} КБ`;
+    const remove = document.createElement('button');
+    remove.type = 'button'; remove.className = 'ghost-button';
+    remove.dataset.action = 'backup-delete'; remove.dataset.backupName = item.name;
+    remove.textContent = 'Удалить';
+    row.append(link, remove); target.append(row);
+  });
+}
+
+async function loadRestoreStatus() {
+  const node = document.querySelector('#restore-status');
+  if (!node) return;
+  try {
+    const response = await fetch('/api/admin/backup/restore/');
+    if (!response.ok) return;
+    const data = await response.json();
+    node.textContent = data.state === 'idle' ? '' : data.message || '';
+    if (data.backup && ['done', 'failed'].includes(data.state)) {
+      const link = document.createElement('a');
+      link.href = `/api/admin/backup/${encodeURIComponent(data.backup)}/`;
+      link.textContent = ' Скачать страховочную копию';
+      node.append(link);
+    }
+    if (['queued', 'running'].includes(data.state)) setTimeout(loadRestoreStatus, 2000);
+  } catch (error) { node.textContent = error.message; }
+}
+
+async function loadServerUsers() {
+  const response = await fetch('/api/admin/users/');
+  if (!response.ok) throw new Error('Не удалось загрузить пользователей');
+  serverUsers = (await response.json()).users;
+  window.loadUsers = () => serverUsers;
+  renderUsers();
+  document.querySelectorAll('#admin-users-body tr').forEach(row => {
+    const user = serverUsers.find(item => item.username === row.dataset.username);
+    const pill = row.querySelector('.status-pill');
+    if (pill && user && !user.isActive) { pill.textContent = 'Отключён'; pill.classList.remove('success'); }
+    if (user?.id === Number(document.body.dataset.userId)) row.querySelector('[data-action="delete-user"]')?.setAttribute('disabled', '');
+  });
+}
+
+function markDevelopmentSections() {
+  const page = document.body.dataset.page;
+  if (!['cam', 'materials-1c'].includes(page)) return;
+  const heading = document.querySelector('.page-intro h2, .one-c-page h2');
+  if (!heading) return;
+  const badge = document.createElement('span');
+  badge.className = 'status-pill';
+  badge.textContent = page === 'materials-1c' ? 'Прямой обмен с 1С: в разработке — скоро'
+    : 'Импорт NX CAM: в разработке — скоро';
+  heading.after(badge);
+}
+
+function hideDeferredIntegrations() {
+  // These modules keep their data and server endpoints for a later release.
+  // The original tpp files stay unchanged; hide only their current entry points.
+  document.querySelectorAll('.familiar-nav a[href="materials-1c.html"]').forEach(link => link.remove());
+  document.querySelectorAll('.nav-button[data-href="cam.html"]').forEach(button => button.closest('.nav-item')?.remove());
+  document.querySelectorAll('.module-link[href="cam.html"]').forEach(link => link.remove());
+}
+
+function planSelection() {
+  const page = document.body.dataset.page;
+  if (!['annual-plan', 'plan-a', 'plan-b'].includes(page)) return null;
+  const kind = page === 'annual-plan' ? 'annual' : page === 'plan-a' ? 'a' : 'b';
+  const controls = document.querySelector('.planning-controls');
+  const year = Number(controls?.querySelector('select')?.value || new Date().getFullYear());
+  const quarter = kind === 'annual' ? 0 : Number(controls?.querySelectorAll('select')[1]?.selectedIndex || 0) + 1;
+  return { kind, year, quarter: kind === 'b' ? Math.floor(new Date().getMonth() / 3) + 1 : quarter };
+}
+
+function replacePlanRows(table, rows) {
+  const body = table?.tBodies?.[0];
+  if (!body) return;
+  body.replaceChildren();
+  rows.forEach((values, index) => {
+    const row = body.insertRow();
+    if (index === 0) row.classList.add('selected');
+    values.forEach(value => row.insertCell().textContent = value ?? '');
+  });
+}
+
+function renderPlans(items) {
+  const page = document.body.dataset.page;
+  const tables = document.querySelectorAll('.planning-table-card table');
+  if (page === 'annual-plan') {
+    replacePlanRows(tables[0], items.map(item => [item.number, '1', item.customer, item.product,
+      item.drawing, item.quantity, item.due_date.slice(0, 4),
+      Math.floor((Number(item.due_date.slice(5, 7)) - 1) / 3) + 1, 'План А',
+      item.priority, item.request, legacyDate(item.start_date), legacyDate(item.start_date), `${item.progress}%`]));
+  } else if (page === 'plan-a') {
+    replacePlanRows(tables[0], items.filter(item => item.planned).map(item => [item.number, '1', 'А',
+      legacyDate(item.start_date), Math.floor((Number(item.due_date.slice(5, 7)) - 1) / 3) + 1,
+      item.due_date.slice(0, 4), item.priority, `${item.progress}%`]));
+    replacePlanRows(tables[1], items.filter(item => !item.planned).map(item => [item.number, '1',
+      item.customer, item.product, item.drawing, item.quantity, 'А', item.priority,
+      item.request, legacyDate(item.start_date)]));
+  } else if (page === 'plan-b') {
+    tables.forEach(table => {
+      const header = table?.tHead?.rows[0];
+      if (header && header.cells[header.cells.length - 1]?.textContent !== 'Прочие') {
+        const cell = document.createElement('th');
+        cell.textContent = 'Прочие';
+        header.append(cell);
+      }
+    });
+    const remaining = item => item.remaining_by_category || Array(8).fill('0');
+    replacePlanRows(tables[0], items.map(item => [item.number, item.customer, ...remaining(item)]));
+    replacePlanRows(tables[1], [[...Array(8).keys()].map(index =>
+      items.reduce((sum, item) => sum + Number(remaining(item)[index]), 0).toFixed(2))]);
+  }
+}
+
+async function loadPlans() {
+  const selection = planSelection();
+  if (!selection) return;
+  const params = new URLSearchParams(selection);
+  const response = await fetch(`/api/legacy/plans/?${params}`);
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || 'Не удалось загрузить план');
+  renderPlans(data.items);
+  return data;
+}
+
+async function loadReportFromServer() {
+  if (document.body.dataset.page !== 'reports') return;
+  const kind = document.querySelector('#report-select')?.value || 'plan-a';
+  const response = await fetch(`/api/legacy/report/?kind=${encodeURIComponent(kind)}`);
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || 'Не удалось обновить отчёт');
+  showReport(false);
+  const table = document.querySelector('#report-preview table');
+  const header = table?.tHead?.rows[0];
+  if (header) {
+    header.replaceChildren();
+    data.headers.forEach(value => { const cell = document.createElement('th'); cell.textContent = value; header.append(cell); });
+  }
+  replacePlanRows(table, data.rows);
+}
+
+let processCatalog = null;
+
+async function loadProcessesFromServer() {
+  if (document.body.dataset.page !== 'processes') return;
+  const response = await fetch('/api/legacy/processes/');
+  if (!response.ok) throw new Error('Не удалось загрузить технологические процессы');
+  const data = await response.json();
+  processCatalog = data;
+  const body = document.querySelector('.recent-processes tbody');
+  body.replaceChildren();
+  data.processes.forEach((item, index) => {
+    const row = body.insertRow();
+    if (index === 0) row.classList.add('selected');
+    row.dataset.routePk = item.id;
+    [item.code, item.product, item.kind, item.version, item.status, item.date].forEach((value, cellIndex) => {
+      const cell = row.insertCell();
+      if (cellIndex === 4) {
+        const pill = document.createElement('span'); pill.className = 'status-pill'; pill.textContent = value; cell.append(pill);
+      } else cell.textContent = value;
+    });
+  });
+}
+
+function openProcessEditor(item = null) {
+  if (!processCatalog) { legacyNotice('Справочник техпроцессов ещё загружается', true); return; }
+  let dialog = document.querySelector('#process-dialog');
+  if (!dialog) {
+    dialog = document.createElement('dialog');
+    dialog.id = 'process-dialog';
+    dialog.className = 'form-modal';
+    dialog.innerHTML = `<form id="process-form" class="form-modal-body">
+      <header><div><span class="eyebrow">Проектирование ТП</span><h2 id="process-dialog-title">Технологическая операция</h2></div></header>
+      <div class="form-modal-grid">
+        <label class="form-modal-field required"><span>Изделие</span><select name="product_id" required></select></label>
+        <label class="form-modal-field required"><span>Рабочий центр</span><select name="work_center_id" required></select></label>
+        <label class="form-modal-field required"><span>Номер операции</span><input name="number" type="number" min="1" required></label>
+        <label class="form-modal-field required"><span>Операция</span><input name="name" required maxlength="200"></label>
+        <label class="form-modal-field required"><span>Вид работ</span><select name="kind" required></select></label>
+        <label class="form-modal-field"><span>Тпз на партию, ч</span><input name="setup_hours" type="number" min="0" step="0.01" value="0"></label>
+        <label class="form-modal-field"><span>Штучное время, ч</span><input name="piece_hours" type="number" min="0" step="0.001" value="0"></label>
+        <label class="form-modal-field"><span>Контроль обязателен</span><input name="quality_required" type="checkbox"></label>
+      </div>
+      <details class="estd-fields"><summary>Поля маршрутной карты ЕСТД · ГОСТ 3.1118-82</summary>
+        <div class="form-modal-grid">
+          <label class="form-modal-field"><span>Код цеха (А)</span><input name="shop_code" maxlength="20"></label>
+          <label class="form-modal-field"><span>Код участка (А)</span><input name="section_code" maxlength="20"></label>
+          <label class="form-modal-field"><span>Код рабочего места (А)</span><input name="workplace_code" maxlength="20"></label>
+          <label class="form-modal-field"><span>Код профессии (Б)</span><input name="profession_code" maxlength="20"></label>
+          <label class="form-modal-field"><span>Исполнителей (Б)</span><input name="worker_count" type="number" min="1" value="1"></label>
+          <label class="form-modal-field"><span>Одновременно деталей (Б)</span><input name="simultaneous_quantity" type="number" min="1" value="1"></label>
+          <label class="form-modal-field"><span>Документы операции (А)</span><input name="document_refs" maxlength="300"></label>
+          <label class="form-modal-field"><span>Содержание операции (О)</span><textarea name="operation_text" maxlength="2000" rows="3"></textarea></label>
+          <label class="form-modal-field"><span>Оснастка через ; (Т)</span><textarea name="tooling" maxlength="2000" rows="3"></textarea></label>
+        </div>
+      </details>
+      <footer><button type="button" class="ghost-button" data-dialog-close="process-dialog">Отмена</button><button type="submit" class="primary-button">Сохранить</button></footer>
+    </form>`;
+    document.body.append(dialog);
+    dialog.querySelector('form').addEventListener('submit', async event => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const values = new FormData(form);
+      const payload = { product_id: values.get('product_id'), work_center_id: values.get('work_center_id'),
+        number: values.get('number'), name: values.get('name'), kind: values.get('kind'),
+        setup_hours: values.get('setup_hours'), piece_hours: values.get('piece_hours'),
+        quality_required: form.elements.quality_required.checked };
+      for (const name of ['shop_code', 'section_code', 'workplace_code', 'profession_code',
+        'worker_count', 'simultaneous_quantity', 'document_refs', 'operation_text', 'tooling']) {
+        payload[name] = values.get(name);
+      }
+      const pk = form.dataset.processPk;
+      try {
+        const response = await fetch(pk ? `/api/legacy/processes/${pk}/` : '/api/legacy/processes/', {
+          method: pk ? 'PUT' : 'POST', headers: apiHeaders(), body: JSON.stringify(payload)
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Не удалось сохранить технологическую операцию');
+        dialog.close(); await loadProcessesFromServer(); legacyNotice('Технологическая операция сохранена в PostgreSQL');
+      } catch (error) { legacyNotice(error.message, true); }
+    });
+  }
+  const form = dialog.querySelector('form');
+  form.reset();
+  form.dataset.processPk = item?.id || '';
+  dialog.querySelector('#process-dialog-title').textContent = item ? 'Изменить операцию' : 'Новая операция';
+  for (const [name, options] of [['product_id', processCatalog.products], ['work_center_id', processCatalog.centers], ['kind', processCatalog.kinds]]) {
+    const select = form.elements[name];
+    select.replaceChildren();
+    options.forEach(option => select.add(new Option(option.name || option.label, option.id || option.value)));
+  }
+  for (const name of ['product_id', 'work_center_id', 'number', 'name', 'kind', 'setup_hours', 'piece_hours',
+    'shop_code', 'section_code', 'workplace_code', 'profession_code', 'worker_count',
+    'simultaneous_quantity', 'document_refs', 'operation_text', 'tooling']) {
+    if (item?.[name] != null) form.elements[name].value = item[name];
+  }
+  form.elements.quality_required.checked = Boolean(item?.quality_required);
+  dialog.showModal();
+}
+
+function installProductEstdActions() {
+  if (document.body.dataset.page !== 'products') return;
+  const anchor = document.querySelector('[data-action="edit-order"]');
+  if (!anchor) return;
+  const edit = document.createElement('button');
+  edit.type = 'button'; edit.className = 'btn'; edit.dataset.action = 'edit-product-estd';
+  edit.textContent = 'Материал ЕСТД';
+  const print = document.createElement('button');
+  print.type = 'button'; print.className = 'btn'; print.dataset.action = 'print-product-estd';
+  print.textContent = 'Маршрутная карта ЕСТД';
+  anchor.after(edit, print);
+}
+
+async function openProductEstdEditor() {
+  const row = document.querySelector('.data-grid tbody tr.selected');
+  if (!row?.dataset.productPk) { legacyNotice('Выберите изделие', true); return; }
+  const response = await fetch(`/api/legacy/products/${row.dataset.productPk}/estd/`);
+  if (!response.ok) throw new Error('Паспорт материала недоступен');
+  const product = await response.json();
+  let dialog = document.querySelector('#product-estd-dialog');
+  if (!dialog) {
+    dialog = document.createElement('dialog');
+    dialog.id = 'product-estd-dialog'; dialog.className = 'form-modal';
+    dialog.innerHTML = `<form class="form-modal-body">
+      <header><div><span class="eyebrow">ГОСТ 3.1118-82 · строки М01 и М02</span><h2>Материал и заготовка изделия</h2></div></header>
+      <p class="estd-product-name"></p>
+      <div class="form-modal-grid">
+        <label class="form-modal-field"><span>Материал по конструкторскому документу (М01)</span><input name="material_specification" maxlength="240"></label>
+        <label class="form-modal-field"><span>Код материала (М02)</span><input name="material_code" maxlength="50"></label>
+        <label class="form-modal-field"><span>Масса детали, кг (МД)</span><input name="part_mass_kg" type="number" min="0" step="0.001"></label>
+        <label class="form-modal-field"><span>Норма расхода, кг</span><input name="material_consumption_kg" type="number" min="0" step="0.001"></label>
+        <label class="form-modal-field"><span>Вид заготовки</span><input name="blank_type" maxlength="100"></label>
+        <label class="form-modal-field"><span>Профиль и размеры заготовки</span><input name="blank_dimensions" maxlength="120"></label>
+        <label class="form-modal-field"><span>Масса заготовки, кг (МЗ)</span><input name="blank_mass_kg" type="number" min="0" step="0.001"></label>
+        <label class="form-modal-field"><span>Деталей из одной заготовки (КД)</span><input name="parts_per_blank" type="number" min="1" value="1"></label>
+      </div>
+      <footer><button type="button" class="ghost-button" data-dialog-close="product-estd-dialog">Отмена</button><button type="submit" class="primary-button">Сохранить</button></footer>
+    </form>`;
+    document.body.append(dialog);
+    dialog.querySelector('form').addEventListener('submit', async event => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const payload = Object.fromEntries(new FormData(form));
+      try {
+        const saved = await fetch(`/api/legacy/products/${form.dataset.productPk}/estd/`, {
+          method: 'PUT', headers: apiHeaders(), body: JSON.stringify(payload)
+        });
+        const result = await saved.json();
+        if (!saved.ok) throw new Error(result.error || 'Не удалось сохранить паспорт материала');
+        dialog.close(); legacyNotice('Паспорт материала сохранён в PostgreSQL');
+      } catch (error) { legacyNotice(error.message, true); }
+    });
+  }
+  const form = dialog.querySelector('form');
+  form.dataset.productPk = product.id;
+  dialog.querySelector('.estd-product-name').textContent = `${product.name} · ${product.drawing || 'без чертежа'}`;
+  for (const name of ['material_specification', 'material_code', 'part_mass_kg',
+    'material_consumption_kg', 'blank_type', 'blank_dimensions', 'blank_mass_kg', 'parts_per_blank']) {
+    form.elements[name].value = product[name] ?? '';
+  }
+  dialog.showModal();
+}
+
+let editingDeviationPk = null;
+
+async function loadDeviationsFromServer() {
+  if (document.body.dataset.page !== 'form2') return;
+  const response = await fetch('/api/legacy/deviations/');
+  if (!response.ok) throw new Error('Не удалось загрузить отклонения');
+  const body = document.querySelector('.deviation-page .data-grid tbody');
+  const data = await response.json();
+  body.replaceChildren();
+  data.deviations.forEach((item, index) => {
+    const row = body.insertRow();
+    if (index === 0) row.classList.add('selected');
+    row.dataset.order = item.order;
+    row.dataset.deviationPk = item.id;
+    row.dataset.date = item.date;
+    row.dataset.hours = item.hours;
+    row.dataset.reason = item.reason;
+    const values = [item.order, '1', item.customer, item.product, item.drawing, '1',
+      item.date.slice(0, 4), String(Math.floor((Number(item.date.slice(5, 7)) - 1) / 3) + 1),
+      item.quantity, '', '', '', '', legacyDate(item.date), item.reason, '', '', '',
+      item.hours, '', '', legacyDate(item.date)];
+    for (let cellIndex = 0; cellIndex < 25; cellIndex += 1) row.insertCell().textContent = values[cellIndex] ?? '';
+  });
+  if (data.deviations.length) {
+    document.querySelector('[data-deviation-field="order"]').value = data.deviations[0].order;
+  } else {
+    const orders = await fetch('/api/legacy/orders/').then(result => result.json());
+    if (orders.orders.length) document.querySelector('[data-deviation-field="order"]').value = orders.orders[0].number;
+  }
+}
+
+async function loadOrdersFromServer() {
+  const table = document.querySelector('.data-grid');
+  if (!table || !['orders', 'products', 'production', 'standards', 'settings'].includes(document.body.dataset.page)) return;
+  try {
+    const response = await fetch('/api/legacy/orders/');
+    if (!response.ok) throw new Error('Список заказов недоступен');
+    const { orders } = await response.json();
+    const body = table.tBodies[0];
+    body.replaceChildren();
+    const count = table.tHead.rows[0].cells.length;
+    orders.forEach((item, index) => {
+      const values = [item.number, '1', item.object_name || item.customer, item.product, item.drawing,
+        String(item.drawing_count),
+        item.due_date.slice(0, 4), String(Math.floor((Number(item.due_date.slice(5, 7)) - 1) / 3) + 1),
+        item.quantity, item.status, item.priority, item.request_number, '', legacyDate(item.start_date),
+        item.note, '', `${item.progress}%`, '', item.norm_per_item,
+        item.planned_hours, item.actual_hours, legacyDate(item.due_date), '', '', ''];
+      const row = body.insertRow();
+      if (index === 0) row.classList.add('selected');
+      row.dataset.order = item.number;
+      row.dataset.customer = item.customer;
+      row.dataset.orderPk = item.id;
+      row.dataset.itemPk = item.item_id;
+      row.dataset.productPk = item.product_id;
+      for (let i = 0; i < count; i += 1) row.insertCell().textContent = values[i] ?? '';
+    });
+    if (orders.length) updateOrderDetails(body.rows[0]);
+    await applySavedColumnPreferences(table);
+  } catch (error) { legacyNotice(error.message, true); }
+}
+
+async function applySavedColumnPreferences(table) {
+  const page = document.body.dataset.page;
+  if (!['orders', 'products', 'production', 'standards'].includes(page)) return;
+  const response = await fetch('/api/legacy/table/settings-columns/');
+  if (!response.ok) return;
+  const { rows } = await response.json();
+  const group = page === 'products' ? '0' : '1';
+  const columns = group === '0'
+    ? { '№': 1, 'Название изделия': 3, 'Чертеж': 4, 'Объект': 2, 'Кол. Чертежей': 5,
+        'Кол. Изделий': 8, 'Материалы': 15, 'Стадия': 9, 'Окончание': 16,
+        'Шифр затрат': 17, 'Приоритет': 10, 'Тр. Предполагаемая': 18,
+        'Сум. планируемой Тр.': 19, 'Сум. фактической Тр.': 20, 'Дата изг.': 21, 'Накладная': 22 }
+    : { 'Заказ': 0, 'Стадия': 9, '№ заявки': 11, 'Д. заявки': 12, 'Д. ввода': 13,
+        'Год пл.': 6, 'Квартал пл.': 7, 'Тр. Сумма план. по заказу': 19,
+        'Тр. Сумма фактич. по заказу': 20, 'Примечание': 14 };
+  rows.filter(row => row[0] === group && row[2] === false).forEach(row => {
+    const index = columns[row[1]];
+    if (index === undefined) return;
+    [...table.rows].forEach(tableRow => { if (tableRow.cells[index]) tableRow.cells[index].hidden = true; });
+  });
+}
+
+const entryProductTemplate = document.querySelector('.entry-products-table tbody tr')?.cloneNode(true);
+
+function installProductListEditor() {
+  const editButton = document.querySelector('.entry-list-button[data-action="add-product-row"]');
+  if (!editButton) return;
+  editButton.dataset.action = 'edit-product-list';
+  editButton.type = 'button';
+  editButton.setAttribute('aria-haspopup', 'dialog');
+  document.body.insertAdjacentHTML('beforeend', `
+    <dialog class="backup-dialog product-list-dialog" id="product-list-dialog" aria-labelledby="product-list-title">
+      <section class="content-card backup-admin-card">
+        <div class="card-heading"><div><span class="eyebrow">Список изделий</span><h3 id="product-list-title">Изменить список изделий</h3></div>
+          <button type="button" class="ghost-button" data-action="product-list-close">Закрыть</button></div>
+        <div class="entry-products-table product-editor-table"><table>
+          <thead><tr><th>Наименование</th><th>Количество</th><th>Чертеж</th><th>Кол. чертежей</th><th>Объект</th><th>Действие</th></tr></thead>
+          <tbody></tbody></table></div>
+        <div class="product-editor-actions"><button type="button" class="ghost-button" data-action="product-list-add">Добавить строку</button>
+          <button type="button" class="primary-button" data-action="product-list-apply">Сохранить изменения</button></div>
+      </section>
+    </dialog>`);
+}
+
+function addProductEditorRow(values = []) {
+  const body = document.querySelector('#product-list-dialog tbody');
+  const row = document.createElement('tr');
+  row.innerHTML = '<td data-label="Наименование"><input aria-label="Наименование" maxlength="200" required></td>' +
+    '<td data-label="Количество"><input aria-label="Количество" type="number" min="1" step="1" required></td>' +
+    '<td data-label="Чертеж"><input aria-label="Чертеж" maxlength="100"></td>' +
+    '<td data-label="Кол. чертежей"><input aria-label="Количество чертежей" type="number" min="1" step="1" required></td>' +
+    '<td data-label="Объект"><input aria-label="Объект" maxlength="200"></td>' +
+    '<td data-label="Действие"><button type="button" class="ghost-button danger" data-action="product-list-delete" aria-label="Удалить строку">Удалить</button></td>';
+  [...row.querySelectorAll('input')].forEach((input, index) => { input.value = values[index] ?? (input.type === 'number' ? '1' : ''); });
+  body.append(row);
+  return row;
+}
+
+function openProductListEditor() {
+  const body = document.querySelector('#product-list-dialog tbody');
+  body.replaceChildren();
+  document.querySelectorAll('.entry-products-table:not(.product-editor-table) tbody tr').forEach(source => {
+    addProductEditorRow([...source.querySelectorAll('input')].map(input => input.value));
+  });
+  if (!body.rows.length) addProductEditorRow();
+  document.querySelector('#product-list-dialog').showModal();
+}
+
+function applyProductListEditor() {
+  const rows = [...document.querySelectorAll('#product-list-dialog tbody tr')];
+  if (!rows.length) { legacyNotice('Добавьте хотя бы одно изделие', true); return; }
+  for (const row of rows) {
+    const inputs = [...row.querySelectorAll('input')];
+    if (!inputs[0].value.trim() || !inputs[1].checkValidity() || !inputs[3].checkValidity()) {
+      legacyNotice('Укажите наименование и положительное количество для каждой строки', true);
+      inputs.find(input => !input.checkValidity())?.focus(); return;
+    }
+  }
+  const body = document.querySelector('.entry-products-table:not(.product-editor-table) tbody');
+  body.replaceChildren();
+  rows.forEach(source => {
+    const row = entryProductTemplate.cloneNode(true);
+    const inputs = [...source.querySelectorAll('input')];
+    [...row.querySelectorAll('input')].forEach((input, index) => { input.value = inputs[index].value.trim(); });
+    body.append(row);
+  });
+  document.querySelector('#product-list-dialog').close();
+  legacyNotice('Список изделий изменён. Сохраните заказ для записи в базу данных.');
+}
+
+function resetEntryForm() {
+  document.querySelectorAll('[data-entry]').forEach(input => {
+    if (input.tagName === 'SELECT') input.selectedIndex = 0;
+    else input.value = input.type === 'number' ? '1' : '';
+  });
+  const body = document.querySelector('.entry-products-table tbody');
+  if (body && !body.rows.length && entryProductTemplate) body.append(entryProductTemplate.cloneNode(true));
+  while (body?.rows.length > 1) body.lastElementChild.remove();
+  body?.querySelectorAll('input').forEach(input => { input.value = input.type === 'number' ? '1' : ''; });
+  const today = new Date();
+  const due = new Date(today); due.setDate(due.getDate() + 30);
+  const localDate = value => `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
+  const start = document.querySelector('[data-entry="start-date"]');
+  const end = document.querySelector('[data-entry="due-date"]');
+  if (start) start.value = localDate(today);
+  if (end) end.value = localDate(due);
+}
+
+async function saveLegacyOrder(exitAfter) {
+  const get = name => document.querySelector(`[data-entry="${name}"]`)?.value?.trim() || '';
+  const start = get('start-date');
+  const due = get('due-date');
+  const items = [...document.querySelectorAll('.entry-products-table tbody tr')].map(row => ({
+    name: row.querySelector('[data-entry="product"]')?.value?.trim() || '',
+    quantity: row.cells[1]?.querySelector('input')?.value || 0,
+    drawing: row.querySelector('[data-entry="drawing"]')?.value?.trim() || '',
+    drawing_count: row.cells[3]?.querySelector('input')?.value || 0,
+    object_name: row.querySelector('[data-entry="product-object"]')?.value?.trim() || ''
+  })).filter(item => item.name);
+  const payload = { number: get('order'), customer: get('object'), request_number: get('request'),
+    start_date: start, due_date: due, priority: Number(get('priority') || 2), note: get('note'),
+    machine: get('machine'), cnc: get('cnc'), cnc_control: get('cnc-control'),
+    cnc_program: get('cnc-program'), one_c_code: get('one-c-code'), items };
+  if (!payload.number || !payload.customer || !start || !due || !items.length) {
+    legacyNotice('Заполните номер заказа, объект, сроки и изделия', true); return;
+  }
+  if (items.some(item => Number(item.quantity) < 1 || Number(item.drawing_count) < 1)) {
+    legacyNotice('Количество изделий и чертежей должно быть больше нуля', true); return;
+  }
+  try {
+    const response = await fetch('/api/legacy/orders/', { method: 'POST', headers: apiHeaders(), body: JSON.stringify(payload) });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Не удалось сохранить заказ');
+    legacyNotice(`Заказ ${result.number} сохранен в PostgreSQL`);
+    if (exitAfter) window.location.href = 'orders.html?view=portfolio';
+    else resetEntryForm();
+  } catch (error) { legacyNotice(error.message, true); }
+}
+
+async function saveSelectedOrder(row) {
+  const cells = row.cells;
+  const payload = { item_id: row.dataset.itemPk, number: cells[0].textContent.trim(),
+    customer: row.dataset.customer || cells[2].textContent.trim(),
+    object_name: cells[2].textContent.trim(),
+    drawing_count: Number(cells[5].textContent.trim()), start_date: isoDate(cells[13].textContent),
+    due_date: isoDate(cells[21].textContent),
+    product: cells[3].textContent.trim(), drawing: cells[4].textContent.trim(),
+    quantity: Number(cells[8].textContent.trim()), priority: Number(cells[10].textContent.trim()) || 2,
+    request_number: cells[11].textContent.trim(), note: cells[14].textContent.trim(),
+    reason: 'Исправление в портфеле заказов' };
+  const response = await fetch(`/api/legacy/orders/${row.dataset.orderPk}/`, { method: 'PUT', headers: apiHeaders(), body: JSON.stringify(payload) });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || 'Не удалось сохранить');
+  [...cells].forEach(cell => cell.contentEditable = 'false');
+  row.dataset.editing = 'false';
+  row.dataset.order = payload.number;
+  document.querySelector('[data-action="edit-order"]')?.replaceChildren(document.createTextNode('Изменить изделие'));
+  legacyNotice('Изменения сохранены');
+}
+
+document.addEventListener('click', async event => {
+  if (event.target.closest('#logout-button')) {
+    event.stopPropagation(); event.preventDefault();
+    await fetch('/logout/', { method: 'POST', headers: { 'X-CSRFToken': csrfToken() } });
+    sessionStorage.clear(); window.location.href = '/login.html'; return;
+  }
+  const action = event.target.closest('[data-action]')?.dataset.action;
+  if (action === 'backup-open') {
+    event.stopPropagation(); event.preventDefault();
+    document.querySelector('#database-backup-dialog')?.showModal();
+    loadBackups().catch(error => legacyNotice(error.message, true)); return;
+  }
+  if (action === 'backup-close') {
+    event.stopPropagation(); event.preventDefault();
+    document.querySelector('#database-backup-dialog')?.close(); return;
+  }
+  if (action === 'edit-product-estd') {
+    event.stopPropagation(); event.preventDefault();
+    openProductEstdEditor().catch(error => legacyNotice(error.message, true)); return;
+  }
+  if (action === 'print-product-estd') {
+    event.stopPropagation(); event.preventDefault();
+    const row = document.querySelector('.data-grid tbody tr.selected');
+    if (!row?.dataset.productPk || !row.dataset.itemPk) { legacyNotice('Выберите изделие', true); return; }
+    window.location.href = `/products/${row.dataset.productPk}/route.pdf?item=${row.dataset.itemPk}`;
+    return;
+  }
+  if (action === 'backup-delete') {
+    event.stopPropagation(); event.preventDefault();
+    const name = event.target.closest('[data-backup-name]')?.dataset.backupName;
+    if (!name || !confirm(`Удалить резервную копию ${name}?`)) return;
+    try {
+      const response = await fetch(`/api/admin/backup/${encodeURIComponent(name)}/`, {
+        method: 'DELETE', headers: { 'X-CSRFToken': csrfToken() }
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Не удалось удалить копию');
+      await loadBackups(); legacyNotice('Резервная копия удалена');
+    } catch (error) { legacyNotice(error.message, true); }
+    return;
+  }
+  if (action === 'edit-product-list') {
+    event.stopPropagation(); event.preventDefault();
+    openProductListEditor();
+    return;
+  }
+  if (action === 'product-list-add') {
+    event.stopPropagation(); event.preventDefault();
+    addProductEditorRow().querySelector('input')?.focus();
+    return;
+  }
+  if (action === 'product-list-delete') {
+    event.stopPropagation(); event.preventDefault();
+    event.target.closest('tr')?.remove();
+    return;
+  }
+  if (action === 'product-list-apply') {
+    event.stopPropagation(); event.preventDefault();
+    applyProductListEditor();
+    return;
+  }
+  if (action === 'product-list-close') {
+    event.stopPropagation(); event.preventDefault();
+    document.querySelector('#product-list-dialog')?.close();
+    return;
+  }
+  if (action === 'clear-entry') {
+    event.stopPropagation(); event.preventDefault();
+    resetEntryForm();
+    return;
+  }
+  if (action === 'save-settings') {
+    event.stopPropagation(); event.preventDefault();
+    const saves = [...document.querySelectorAll('[data-settings-list]')]
+      .filter(list => currentRole === 'admin' || list.dataset.settingsList !== 'staff')
+      .map(list => saveSettingsList(list));
+    saves.push(saveSettingsColumns());
+    const periods = document.querySelector('.settings-quarter-table table');
+    if (periods && currentRole === 'admin') {
+      saves.push(savePlanPeriods(periods));
+      saves.push(saveSettingsPlanInputs());
+    }
+    Promise.all(saves).then(results => { if (results.every(result => result !== false)) window.location.href = 'orders.html'; });
+    return;
+  }
+  if (action === 'update-materials') {
+    event.stopPropagation(); event.preventDefault();
+    window.location.href = '/records/materials/'; return;
+  }
+  if (['test-1c', 'sync-1c', 'select-import-file', 'save-import'].includes(action)) {
+    event.stopPropagation(); event.preventDefault();
+    legacyNotice('Прямой обмен с 1С и NX CAM: в разработке — скоро'); return;
+  }
+  if (action === 'test-server') {
+    event.stopPropagation(); event.preventDefault(); await loadDatabaseStatus(); return;
+  }
+  if (action === 'edit-server') {
+    event.stopPropagation(); event.preventDefault();
+    await loadDatabaseStatus();
+    document.querySelector('#server-form [name="password"]').value = '';
+    document.querySelector('#server-dialog')?.showModal(); return;
+  }
+  if (action === 'backup-export' || action === 'backup-export-archive') {
+    event.stopPropagation(); event.preventDefault();
+    try {
+      const response = await fetch(action === 'backup-export' ? '/api/admin/backup/export/' : '/api/admin/backup/export/?format=dump', {
+        method: 'POST', headers: { 'X-CSRFToken': csrfToken() }
+      });
+      if (!response.ok) throw new Error('Не удалось выгрузить резервную копию');
+      const fileName = response.headers.get('Content-Disposition')?.match(/filename="([^"]+)"/)?.[1] || 'backup.sql';
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement('a'); link.href = url; link.download = fileName;
+      document.body.append(link); link.click(); link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (error) { legacyNotice(error.message, true); }
+    return;
+  }
+  if (action === 'backup-create') {
+    event.stopPropagation(); event.preventDefault();
+    try {
+      const response = await fetch('/api/admin/backup/', { method: 'POST', headers: { 'X-CSRFToken': csrfToken() } });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Не удалось создать резервную копию');
+      await loadBackups(); legacyNotice('Резервная копия создана на сервере');
+    } catch (error) { legacyNotice(error.message, true); }
+    return;
+  }
+  if (action === 'backup-restore') {
+    event.stopPropagation(); event.preventDefault();
+    const file = document.querySelector('#restore-dump-file')?.files?.[0];
+    if (!file) { legacyNotice('Выберите файл резервной копии .dump', true); return; }
+    if (!confirm('Восстановление заменит текущие данные PostgreSQL. Перед заменой будет создана страховочная копия. Продолжить?')) return;
+    const data = new FormData(); data.append('file', file);
+    try {
+      const response = await fetch('/api/admin/backup/restore/', {
+        method: 'POST', headers: { 'X-CSRFToken': csrfToken() }, body: data
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Не удалось принять файл резервной копии');
+      legacyNotice(result.message);
+      loadRestoreStatus();
+    } catch (error) { legacyNotice(error.message, true); }
+    return;
+  }
+  if (action === 'add-user' || action === 'edit-user') {
+    const password = document.querySelector('#user-form [name="password"]');
+    if (password) password.required = action === 'add-user';
+  }
+  if (action === 'delete-user') {
+    event.stopPropagation(); event.preventDefault();
+    const username = event.target.closest('tr')?.dataset.username;
+    const user = serverUsers.find(item => item.username === username);
+    if (!user || !confirm(`Отключить пользователя ${username}?`)) return;
+    try {
+      const response = await fetch(`/api/admin/users/${user.id}/`, { method: 'DELETE', headers: apiHeaders() });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Не удалось отключить пользователя');
+      await loadServerUsers(); legacyNotice('Пользователь отключён');
+    } catch (error) { legacyNotice(error.message, true); }
+    return;
+  }
+  if (['plan-preview', 'plan-clear', 'plan-approve'].includes(action) && planSelection()) {
+    event.stopPropagation(); event.preventDefault();
+    if (action === 'plan-clear') {
+      document.querySelectorAll('.planning-table-card table tbody').forEach(body => body.replaceChildren());
+      return;
+    }
+    try {
+      if (action === 'plan-preview') {
+        const result = await loadPlans();
+        legacyNotice(`Заказов в выбранном периоде: ${result.items.length}`);
+      } else {
+        const response = await fetch('/api/legacy/plans/', {
+          method: 'POST', headers: apiHeaders(), body: JSON.stringify(planSelection())
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Не удалось утвердить план');
+        await loadPlans(); legacyNotice(`${result.name}: утверждено ${result.lines} позиций`);
+      }
+    } catch (error) { legacyNotice(error.message, true); }
+    return;
+  }
+  if (action === 'show-selected-report') {
+    event.stopPropagation(); event.preventDefault();
+    loadReportFromServer().catch(error => legacyNotice(error.message, true)); return;
+  }
+  if (['new-process', 'edit-process', 'approve-process', 'delete-process'].includes(action)) {
+    event.stopPropagation(); event.preventDefault();
+    const row = document.querySelector('.recent-processes tbody tr.selected');
+    const pk = row?.dataset.routePk;
+    if (action === 'new-process') { openProcessEditor(); return; }
+    if (!pk) { legacyNotice('Выберите технологический процесс', true); return; }
+    if (action === 'edit-process') { openProcessEditor(processCatalog?.processes.find(item => item.id === Number(pk))); return; }
+    if (action === 'delete-process' && !confirm('Удалить выбранную операцию?')) return;
+    try {
+      const response = await fetch(`/api/legacy/processes/${pk}/`, {
+        method: action === 'approve-process' ? 'PUT' : 'DELETE', headers: apiHeaders()
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Не удалось изменить процесс');
+      await loadProcessesFromServer(); legacyNotice('Изменения сохранены в PostgreSQL');
+    } catch (error) { legacyNotice(error.message, true); }
+    return;
+  }
+  if (['add-deviation', 'edit-deviation', 'delete-deviation'].includes(action)) {
+    event.stopPropagation(); event.preventDefault();
+    const row = document.querySelector('.deviation-page .data-grid tbody tr.selected');
+    const field = name => document.querySelector(`[data-deviation-field="${name}"]`);
+    if (action === 'edit-deviation') {
+      if (!row?.dataset.deviationPk) { legacyNotice('Выберите отклонение', true); return; }
+      editingDeviationPk = row.dataset.deviationPk;
+      field('order').value = row.dataset.order;
+      field('date').value = row.dataset.date;
+      field('hours').value = row.dataset.hours;
+      field('reason').value = row.dataset.reason;
+      if (!field('reason').value) {
+        field('reason').add(new Option(row.dataset.reason, row.dataset.reason));
+        field('reason').value = row.dataset.reason;
+      }
+      document.querySelector('[data-action="add-deviation"]').textContent = 'Сохранить';
+      return;
+    }
+    if (action === 'delete-deviation') {
+      if (!row?.dataset.deviationPk || !confirm('Удалить выбранное отклонение?')) return;
+      try {
+        const response = await fetch(`/api/legacy/deviations/${row.dataset.deviationPk}/`, { method: 'DELETE', headers: apiHeaders() });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Не удалось удалить отклонение');
+        await loadDeviationsFromServer(); legacyNotice('Отклонение удалено');
+      } catch (error) { legacyNotice(error.message, true); }
+      return;
+    }
+    const payload = { order: field('order').value.trim(), date: field('date').value,
+      hours: field('hours').value, reason: field('reason').value };
+    try {
+      const response = await fetch(editingDeviationPk ? `/api/legacy/deviations/${editingDeviationPk}/` : '/api/legacy/deviations/', {
+        method: editingDeviationPk ? 'PUT' : 'POST', headers: apiHeaders(), body: JSON.stringify(payload)
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Не удалось сохранить отклонение');
+      editingDeviationPk = null;
+      document.querySelector('[data-action="add-deviation"]').textContent = 'Добавить';
+      await loadDeviationsFromServer(); legacyNotice('Отклонение сохранено в PostgreSQL');
+    } catch (error) { legacyNotice(error.message, true); }
+    return;
+  }
+  if (['export-current', 'download-current-report', 'download-all-reports'].includes(action)) {
+    event.stopPropagation(); event.preventDefault();
+    if (action === 'export-current') {
+      const kind = { standards: 'standards', production: 'production' }[document.body.dataset.page];
+      window.location.href = kind ? `/api/legacy/report/export/?kind=${kind}` : '/reports/export/';
+    }
+    else window.location.href = `/api/legacy/report/export/?kind=${action === 'download-all-reports' ? 'all' : encodeURIComponent(document.querySelector('#report-select')?.value || 'plan-a')}`;
+    return;
+  }
+  if (action === 'save-order-new' || action === 'save-order-exit') {
+    event.stopPropagation(); event.preventDefault();
+    await saveLegacyOrder(action === 'save-order-exit'); return;
+  }
+  if (action === 'add-order' && ['orders', 'products'].includes(document.body.dataset.page)) {
+    event.stopPropagation(); event.preventDefault(); window.location.href = 'entry.html'; return;
+  }
+  if (action === 'edit-order' && ['orders', 'products', 'production'].includes(document.body.dataset.page)) {
+    event.stopPropagation(); event.preventDefault();
+    const row = document.querySelector('.data-grid tbody tr.selected');
+    if (!row?.dataset.itemPk) { legacyNotice('Выберите изделие', true); return; }
+    if (row.dataset.editing === 'true') {
+      try { await saveSelectedOrder(row); } catch (error) { legacyNotice(error.message, true); }
+    } else {
+      [0, 2, 3, 4, 8, 10, 11, 13, 14, 21].forEach(index => { if (row.cells[index]) row.cells[index].contentEditable = 'true'; });
+      row.dataset.editing = 'true';
+      event.target.closest('[data-action="edit-order"]').textContent = 'Сохранить';
+      row.cells[0]?.focus();
+    }
+    return;
+  }
+  if (action === 'delete-order' && ['orders', 'products'].includes(document.body.dataset.page)) {
+    event.stopPropagation(); event.preventDefault();
+    const row = document.querySelector('.data-grid tbody tr.selected');
+    if (!row?.dataset.orderPk || !confirm(`Удалить изделие из заказа ${row.dataset.order}?`)) return;
+    const response = await fetch(`/api/legacy/orders/${row.dataset.orderPk}/`, { method: 'DELETE', headers: apiHeaders(), body: JSON.stringify({ item_id: row.dataset.itemPk, reason: 'Удаление изделия в портфеле заказов' }) });
+    if (response.ok) { row.remove(); legacyNotice('Изделие удалено'); }
+    else { const result = await response.json(); legacyNotice(result.error || 'Не удалось удалить изделие', true); }
+  }
+  if (action === 'import-1c') {
+    event.stopPropagation(); event.preventDefault();
+    const file = document.querySelector('#one-c-file')?.files[0];
+    if (!file) { legacyNotice('Выберите файл CSV, JSON или XLSX', true); return; }
+    if (file.name.toLowerCase().endsWith('.xls')) {
+      legacyNotice('Для загрузки сохраните файл 1С в формате XLSX, CSV или JSON', true); return;
+    }
+    try {
+      const data = new FormData(); data.append('file', file);
+      const response = await fetch('/materials/import/', { method: 'POST', headers: { 'X-CSRFToken': csrfToken(), Accept: 'application/json' }, body: data });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Ошибка загрузки файла 1С');
+      legacyNotice(`Материалов загружено в PostgreSQL: ${result.count}`); location.reload();
+    } catch (error) { legacyNotice(error.message, true); }
+    return;
+  }
+}, true);
+
+installTppFields();
+installProductListEditor();
+installProductEstdActions();
+hideDeferredIntegrations();
+installDatabaseAdmin();
+const timesheetMonthInput = document.querySelector('.timesheet-table')?.closest('.module-table-card')?.querySelector('input[type="month"]');
+if (timesheetMonthInput) {
+  const now = new Date();
+  timesheetMonthInput.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const heading = timesheetMonthInput.closest('.module-table-card')?.querySelector('.card-heading h3');
+  if (heading) heading.textContent = new Intl.DateTimeFormat('ru-RU', { month: 'long', year: 'numeric' }).format(now);
+}
+connectTppTables();
+connectSettings();
+connectMaterialCalculator();
+loadMaterialsFromServer().catch(error => legacyNotice(error.message, true));
+loadDashboardFromServer().catch(error => legacyNotice(error.message, true));
+markDevelopmentSections();
+
+if (document.body.dataset.page === 'admin') {
+  loadDatabaseStatus();
+  loadServerUsers().catch(error => legacyNotice(error.message, true));
+  document.querySelector('#user-form')?.addEventListener('submit', async event => {
+    event.preventDefault(); event.stopImmediatePropagation();
+    const values = new FormData(event.currentTarget);
+    const original = String(values.get('originalUsername') || '');
+    const user = serverUsers.find(item => item.username === original);
+    const payload = { username: String(values.get('username') || '').trim(),
+      fullName: String(values.get('fullName') || '').trim(),
+      password: String(values.get('password') || ''), role: String(values.get('role') || '') };
+    try {
+      const response = await fetch(user ? `/api/admin/users/${user.id}/` : '/api/admin/users/', {
+        method: user ? 'PUT' : 'POST', headers: apiHeaders(), body: JSON.stringify(payload)
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Не удалось сохранить пользователя');
+      document.querySelector('#user-dialog')?.close();
+      await loadServerUsers(); legacyNotice('Пользователь сохранён в PostgreSQL');
+    } catch (error) { legacyNotice(error.message, true); }
+  }, true);
+}
+
+if (planSelection()) loadPlans().catch(error => legacyNotice(error.message, true));
+if (document.body.dataset.page === 'reports') {
+  loadReportFromServer().catch(error => legacyNotice(error.message, true));
+  document.querySelector('#report-select')?.addEventListener('change', () =>
+    loadReportFromServer().catch(error => legacyNotice(error.message, true)));
+}
+if (document.body.dataset.page === 'processes') loadProcessesFromServer().catch(error => legacyNotice(error.message, true));
+if (document.body.dataset.page === 'form2') loadDeviationsFromServer().catch(error => legacyNotice(error.message, true));
+
+if (document.body.dataset.page === 'entry') {
+  const today = new Date();
+  const due = new Date(today); due.setDate(due.getDate() + 30);
+  const localDate = value => `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
+  const start = document.querySelector('[data-entry="start-date"]');
+  const end = document.querySelector('[data-entry="due-date"]');
+  if (start && !start.value) start.value = localDate(today);
+  if (end && !end.value) end.value = localDate(due);
+}
+loadOrdersFromServer();

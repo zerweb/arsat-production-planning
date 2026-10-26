@@ -1,0 +1,583 @@
+[
+  {
+    "model": "production.customer",
+    "pk": 1,
+    "fields": {
+      "name": "ОРМ",
+      "archived": false,
+      "code": "ORM"
+    }
+  },
+  {
+    "model": "production.customer",
+    "pk": 2,
+    "fields": {
+      "name": "РИК",
+      "archived": false,
+      "code": "RIK"
+    }
+  },
+  {
+    "model": "production.department",
+    "pk": 1,
+    "fields": {
+      "name": "Механический цех",
+      "archived": false
+    }
+  },
+  {
+    "model": "production.department",
+    "pk": 2,
+    "fields": {
+      "name": "Сборочный участок",
+      "archived": false
+    }
+  },
+  {
+    "model": "production.workcenter",
+    "pk": 1,
+    "fields": {
+      "name": "Токарный участок",
+      "archived": false,
+      "department": 1,
+      "hours_per_day": "8.00",
+      "shifts": 2
+    }
+  },
+  {
+    "model": "production.workcenter",
+    "pk": 2,
+    "fields": {
+      "name": "Сборочная линия",
+      "archived": false,
+      "department": 2,
+      "hours_per_day": "8.00",
+      "shifts": 1
+    }
+  },
+  {
+    "model": "production.equipment",
+    "pk": 1,
+    "fields": {
+      "name": "Токарный станок 16К20",
+      "archived": false,
+      "work_center": 1,
+      "available": true,
+      "cnc": false,
+      "cnc_control": "",
+      "inventory_number": ""
+    }
+  },
+  {
+    "model": "production.equipment",
+    "pk": 2,
+    "fields": {
+      "name": "Сборочный стенд С-2",
+      "archived": false,
+      "work_center": 2,
+      "available": true,
+      "cnc": false,
+      "cnc_control": "",
+      "inventory_number": ""
+    }
+  },
+  {
+    "model": "production.equipment",
+    "pk": 3,
+    "fields": {
+      "name": "Токарный станок с ЧПУ ТС-200",
+      "archived": false,
+      "work_center": 1,
+      "available": true,
+      "cnc": true,
+      "cnc_control": "Fanuc",
+      "inventory_number": "ЧПУ-001"
+    }
+  },
+  {
+    "model": "production.employee",
+    "pk": 1,
+    "fields": {
+      "name": "Иванов И. И.",
+      "archived": false,
+      "personnel_number": "001",
+      "user": null,
+      "department": 1,
+      "profession": "Токарь",
+      "grade": 5,
+      "hours_per_day": "8.00",
+      "shift": 1,
+      "hired_on": null,
+      "personnel_status": "Работает"
+    }
+  },
+  {
+    "model": "production.employee",
+    "pk": 2,
+    "fields": {
+      "name": "Петрова Н. В.",
+      "archived": false,
+      "personnel_number": "002",
+      "user": null,
+      "department": 2,
+      "profession": "Контролер",
+      "grade": 5,
+      "hours_per_day": "8.00",
+      "shift": 1,
+      "hired_on": null,
+      "personnel_status": "Работает"
+    }
+  },
+  {
+    "model": "production.product",
+    "pk": 1,
+    "fields": {
+      "name": "Патрон станка",
+      "archived": false,
+      "drawing": "7002",
+      "unit": "шт",
+      "kind": "assembly",
+      "material_specification": "",
+      "material_code": "",
+      "part_mass_kg": null,
+      "material_consumption_kg": null,
+      "blank_type": "",
+      "blank_dimensions": "",
+      "blank_mass_kg": null,
+      "parts_per_blank": 1
+    }
+  },
+  {
+    "model": "production.product",
+    "pk": 2,
+    "fields": {
+      "name": "Винт М12",
+      "archived": false,
+      "drawing": "Л54.150.01.054",
+      "unit": "шт",
+      "kind": "part",
+      "material_specification": "",
+      "material_code": "",
+      "part_mass_kg": null,
+      "material_consumption_kg": null,
+      "blank_type": "",
+      "blank_dimensions": "",
+      "blank_mass_kg": null,
+      "parts_per_blank": 1
+    }
+  },
+  {
+    "model": "production.product",
+    "pk": 3,
+    "fields": {
+      "name": "Контейнер защитный",
+      "archived": false,
+      "drawing": "1Ж.6867.000.00СБ",
+      "unit": "шт",
+      "kind": "product",
+      "material_specification": "",
+      "material_code": "",
+      "part_mass_kg": null,
+      "material_consumption_kg": null,
+      "blank_type": "",
+      "blank_dimensions": "",
+      "blank_mass_kg": null,
+      "parts_per_blank": 1
+    }
+  },
+  {
+    "model": "production.operationdefinition",
+    "pk": 1,
+    "fields": {
+      "code": "R00001",
+      "name": "Токарная обработка",
+      "kind": "machining",
+      "equipment": 1,
+      "equipment_name": "Токарный станок 16К20",
+      "min_grade": 1,
+      "norm_unit": "нормо-час",
+      "estd_code": "010",
+      "active": true
+    }
+  },
+  {
+    "model": "production.operationdefinition",
+    "pk": 2,
+    "fields": {
+      "code": "R00002",
+      "name": "Токарная обработка",
+      "kind": "machining",
+      "equipment": 3,
+      "equipment_name": "Токарный станок с ЧПУ ТС-200",
+      "min_grade": 1,
+      "norm_unit": "нормо-час",
+      "estd_code": "010",
+      "active": true
+    }
+  },
+  {
+    "model": "production.operationdefinition",
+    "pk": 3,
+    "fields": {
+      "code": "R00003",
+      "name": "Сборка корпуса",
+      "kind": "assembly",
+      "equipment": null,
+      "equipment_name": "",
+      "min_grade": 1,
+      "norm_unit": "нормо-час",
+      "estd_code": "010",
+      "active": true
+    }
+  },
+  {
+    "model": "production.routeoperation",
+    "pk": 1,
+    "fields": {
+      "product": 1,
+      "definition": 1,
+      "number": 10,
+      "name": "Токарная обработка",
+      "kind": "machining",
+      "work_center": 1,
+      "equipment": 1,
+      "setup_hours": "1.50",
+      "piece_hours": "2.250",
+      "quality_required": true,
+      "approved": true,
+      "cnc_program": "",
+      "machine_setup": "",
+      "shop_code": "",
+      "section_code": "",
+      "workplace_code": "",
+      "document_refs": "",
+      "operation_text": "",
+      "tooling": "",
+      "profession_code": "",
+      "worker_count": 1,
+      "simultaneous_quantity": 1
+    }
+  },
+  {
+    "model": "production.routeoperation",
+    "pk": 2,
+    "fields": {
+      "product": 2,
+      "definition": 2,
+      "number": 10,
+      "name": "Токарная обработка",
+      "kind": "machining",
+      "work_center": 1,
+      "equipment": 3,
+      "setup_hours": "0.75",
+      "piece_hours": "0.300",
+      "quality_required": false,
+      "approved": true,
+      "cnc_program": "O1201",
+      "machine_setup": "",
+      "shop_code": "",
+      "section_code": "",
+      "workplace_code": "",
+      "document_refs": "",
+      "operation_text": "",
+      "tooling": "",
+      "profession_code": "",
+      "worker_count": 1,
+      "simultaneous_quantity": 1
+    }
+  },
+  {
+    "model": "production.routeoperation",
+    "pk": 3,
+    "fields": {
+      "product": 3,
+      "definition": 3,
+      "number": 10,
+      "name": "Сборка корпуса",
+      "kind": "assembly",
+      "work_center": 2,
+      "equipment": null,
+      "setup_hours": "2.00",
+      "piece_hours": "4.000",
+      "quality_required": true,
+      "approved": true,
+      "cnc_program": "",
+      "machine_setup": "",
+      "shop_code": "",
+      "section_code": "",
+      "workplace_code": "",
+      "document_refs": "",
+      "operation_text": "",
+      "tooling": "",
+      "profession_code": "",
+      "worker_count": 1,
+      "simultaneous_quantity": 1
+    }
+  },
+  {
+    "model": "production.order",
+    "pk": 1,
+    "fields": {
+      "number": "З-2026-041",
+      "customer": 1,
+      "department": 1,
+      "request_number": "55-26/215",
+      "start_date": "2026-09-29",
+      "due_date": "2026-11-01",
+      "priority": 2,
+      "status": "work",
+      "constraint": "",
+      "note": "",
+      "archived": false,
+      "created_at": "2026-10-14T05:14:03.010Z",
+      "updated_at": "2026-10-14T05:14:03.010Z"
+    }
+  },
+  {
+    "model": "production.order",
+    "pk": 2,
+    "fields": {
+      "number": "З-2026-042",
+      "customer": 2,
+      "department": 2,
+      "request_number": "44-26/1095",
+      "start_date": "2026-09-24",
+      "due_date": "2026-10-12",
+      "priority": 1,
+      "status": "risk",
+      "constraint": "Ожидается листовая сталь",
+      "note": "",
+      "archived": false,
+      "created_at": "2026-10-14T05:14:03.011Z",
+      "updated_at": "2026-10-14T05:14:03.011Z"
+    }
+  },
+  {
+    "model": "production.order",
+    "pk": 3,
+    "fields": {
+      "number": "З-2026-043",
+      "customer": 1,
+      "department": 1,
+      "request_number": "",
+      "start_date": "2026-10-16",
+      "due_date": "2026-11-18",
+      "priority": 3,
+      "status": "planned",
+      "constraint": "",
+      "note": "",
+      "archived": false,
+      "created_at": "2026-10-14T05:14:03.012Z",
+      "updated_at": "2026-10-14T05:14:03.012Z"
+    }
+  },
+  {
+    "model": "production.orderitem",
+    "pk": 1,
+    "fields": {
+      "order": 1,
+      "product": 1,
+      "batch": "П-041",
+      "quantity": 12,
+      "drawing_count": 1,
+      "object_name": "",
+      "equipment": null,
+      "cnc_program": "",
+      "one_c_code": ""
+    }
+  },
+  {
+    "model": "production.orderitem",
+    "pk": 2,
+    "fields": {
+      "order": 2,
+      "product": 3,
+      "batch": "П-042",
+      "quantity": 5,
+      "drawing_count": 1,
+      "object_name": "",
+      "equipment": null,
+      "cnc_program": "",
+      "one_c_code": ""
+    }
+  },
+  {
+    "model": "production.orderitem",
+    "pk": 3,
+    "fields": {
+      "order": 3,
+      "product": 2,
+      "batch": "П-043",
+      "quantity": 80,
+      "drawing_count": 1,
+      "object_name": "",
+      "equipment": 3,
+      "cnc_program": "O1201",
+      "one_c_code": "ВИНТ-М12"
+    }
+  },
+  {
+    "model": "production.program",
+    "pk": 1,
+    "fields": {
+      "name": "Программа IV квартала 2026",
+      "year": 2026,
+      "quarter": 4,
+      "version": 1,
+      "status": "approved",
+      "correction_reason": "",
+      "created_at": "2026-10-14T05:14:03.019Z"
+    }
+  },
+  {
+    "model": "production.programline",
+    "pk": 1,
+    "fields": {
+      "program": 1,
+      "order_item": 1,
+      "work_center": 1,
+      "quantity": 12,
+      "due_date": "2026-11-01"
+    }
+  },
+  {
+    "model": "production.programline",
+    "pk": 2,
+    "fields": {
+      "program": 1,
+      "order_item": 2,
+      "work_center": 2,
+      "quantity": 5,
+      "due_date": "2026-10-12"
+    }
+  },
+  {
+    "model": "production.job",
+    "pk": 1,
+    "fields": {
+      "program_line": 1,
+      "operation": 1,
+      "employee": 1,
+      "quantity": 12,
+      "actual_quantity": 5,
+      "planned_start": "2026-10-04",
+      "planned_end": "2026-10-17",
+      "actual_end": null,
+      "actual_hours": "13.20",
+      "status": "work",
+      "deviation_reason": ""
+    }
+  },
+  {
+    "model": "production.job",
+    "pk": 2,
+    "fields": {
+      "program_line": 2,
+      "operation": 3,
+      "employee": null,
+      "quantity": 5,
+      "actual_quantity": 0,
+      "planned_start": "2026-10-06",
+      "planned_end": "2026-10-13",
+      "actual_end": null,
+      "actual_hours": "0.00",
+      "status": "paused",
+      "deviation_reason": "Нет материала"
+    }
+  },
+  {
+    "model": "production.productionevent",
+    "pk": 1,
+    "fields": {
+      "order": 1,
+      "job": 1,
+      "kind": "produced",
+      "quantity": 5,
+      "date": "2026-10-13",
+      "document": "Акт 41/1",
+      "actor": 1
+    }
+  },
+  {
+    "model": "production.productionevent",
+    "pk": 2,
+    "fields": {
+      "order": 1,
+      "job": 1,
+      "kind": "accepted",
+      "quantity": 5,
+      "date": "2026-10-14",
+      "document": "ОТК 41/1",
+      "actor": 1
+    }
+  },
+  {
+    "model": "production.qualitycheck",
+    "pk": 1,
+    "fields": {
+      "job": 1,
+      "result": "accepted",
+      "quantity": 5,
+      "defect": "",
+      "decision": "",
+      "repeated": false,
+      "date": "2026-10-13",
+      "inspector": 2
+    }
+  },
+  {
+    "model": "production.material",
+    "pk": 1,
+    "fields": {
+      "name": "Круг 40 Сталь 45",
+      "archived": false,
+      "code": "МАТ-000184",
+      "unit": "кг",
+      "stock_quantity": "1240.500",
+      "reserved_quantity": "315.000"
+    }
+  },
+  {
+    "model": "production.material",
+    "pk": 2,
+    "fields": {
+      "name": "Лист 12 09Г2С",
+      "archived": false,
+      "code": "МАТ-000327",
+      "unit": "кг",
+      "stock_quantity": "860.000",
+      "reserved_quantity": "240.000"
+    }
+  },
+  {
+    "model": "production.materialrequirement",
+    "pk": 1,
+    "fields": {
+      "order_item": 1,
+      "material": 1,
+      "quantity_per_item": "8.250",
+      "reserved": "99.000"
+    }
+  },
+  {
+    "model": "production.materialrequirement",
+    "pk": 2,
+    "fields": {
+      "order_item": 2,
+      "material": 2,
+      "quantity_per_item": "50.000",
+      "reserved": "100.000"
+    }
+  },
+  {
+    "model": "production.downtime",
+    "pk": 1,
+    "fields": {
+      "job": 2,
+      "reason": "Нет материала",
+      "hours": "8.00",
+      "date": "2026-10-13",
+      "note": ""
+    }
+  }
+]

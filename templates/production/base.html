@@ -1,0 +1,20 @@
+{% load static %}<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{% block title %}Планирование производства{% endblock %} · АО ГНЦ НИИАР</title><link rel="icon" type="image/svg+xml" href="{% static 'production/legacy/assets/favicon.svg' %}"><link rel="stylesheet" href="{% static 'production/app.css' %}"></head>
+<body>
+<div class="shell">
+  <aside class="sidebar">
+    <a class="brand" href="{% url 'dashboard' %}"><img src="{% static 'production/rosatom-logo.svg' %}" alt=""><span>АО ГНЦ НИИАР<small>Планирование производства</small></span></a>
+    <nav><a href="{% url 'dashboard' %}">▦ Главная панель</a><p>Планирование</p>
+      {% for code,label in nav %}{% if code == 'orders' or code == 'items' or code == 'programs' or code == 'lines' or code == 'jobs' %}<a href="{% url 'records' code %}">{{ label }}</a>{% endif %}{% endfor %}
+      <p>Учет и контроль</p>{% for code,label in nav %}{% if code == 'events' or code == 'quality' or code == 'requirements' or code == 'materials' or code == 'downtime' %}<a href="{% url 'records' code %}">{{ label }}</a>{% endif %}{% endfor %}
+      <p>Справочники</p>{% for code,label in nav %}{% if code == 'products' or code == 'routes' or code == 'cutting-norms' or code == 'customers' or code == 'departments' or code == 'centers' or code == 'equipment' or code == 'employees' %}<a href="{% url 'records' code %}">{{ label }}</a>{% endif %}{% endfor %}
+      <p>Система</p><a href="{% url 'capacity' %}">Загрузка мощностей</a><a href="{% url 'reports' %}">Отчеты и ПФА</a>{% if role == 'admin' %}<a href="{% url 'users' %}">Пользователи</a>{% endif %}{% if role == 'admin' or role == 'manager' %}<a href="{% url 'audit' %}">Журнал изменений</a>{% endif %}
+    </nav>
+  </aside>
+  <div class="main"><header class="topbar"><div><span class="eyebrow">Система планирования и диспетчеризации</span><h1>{% block heading %}Производство{% endblock %}</h1></div><div class="user"><span>{{ request.user.get_full_name|default:request.user.username }}<small>{{ role }}</small></span><form method="post" action="{% url 'logout' %}">{% csrf_token %}<button class="quiet" type="submit">Выйти</button></form></div></header>
+    <main class="content">{% if messages %}<div class="messages">{% for message in messages %}<div class="toast {{ message.tags }}">{{ message }}</div>{% endfor %}</div>{% endif %}{% block content %}{% endblock %}</main>
+  </div>
+</div>
+<dialog id="edit-dialog"><button class="dialog-close" type="button" aria-label="Закрыть">×</button><div id="dialog-content"></div></dialog>
+<script src="{% static 'production/app.js' %}"></script>
+</body></html>

@@ -1,0 +1,29 @@
+{% extends 'production/base.html' %}
+{% block title %}{{ title }}{% endblock %}
+{% block heading %}{{ title }}{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="panel-head"><div><span class="eyebrow">Данные PostgreSQL</span><h2>{{ title }}</h2></div>{% if can_write %}<a class="button primary modal-link" href="{% url 'record_new' key %}">＋ Добавить</a>{% endif %}</div>
+  <form class="filters" method="get">
+    <input name="q" value="{{ q }}" placeholder="Поиск">
+    {% if statuses %}<select name="status"><option value="">Все состояния</option>{% for value,label in statuses %}<option value="{{ value }}" {% if request.GET.status == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select>{% endif %}
+    {% if key == 'orders' %}<select name="department"><option value="">Все подразделения</option>{% for dep in departments %}<option value="{{ dep.pk }}" {% if request.GET.department == dep.pk|stringformat:'s' %}selected{% endif %}>{{ dep.name }}</option>{% endfor %}</select><input type="number" min="1" name="priority" value="{{ request.GET.priority }}" placeholder="Приоритет"><input type="date" name="due_before" value="{{ request.GET.due_before }}">{% endif %}
+    {% if key == 'jobs' %}<select name="work_center"><option value="">Все участки</option>{% for center in centers %}<option value="{{ center.pk }}" {% if request.GET.work_center == center.pk|stringformat:'s' %}selected{% endif %}>{{ center.name }}</option>{% endfor %}</select><select name="employee"><option value="">Все исполнители</option>{% for employee in employees %}<option value="{{ employee.pk }}" {% if request.GET.employee == employee.pk|stringformat:'s' %}selected{% endif %}>{{ employee.name }}</option>{% endfor %}</select><input type="date" name="due_before" value="{{ request.GET.due_before }}">{% endif %}
+    <button class="button" type="submit">Показать</button><a class="quiet" href="{% url 'records' key %}">Сбросить</a>
+  </form>
+  <div class="table-scroll"><table><thead><tr>{% for name,label in columns %}<th>{{ label }}</th>{% endfor %}<th>Действия</th></tr></thead><tbody>
+  {% for obj,cells in rows %}<tr>{% for cell in cells %}<td>{{ cell|default_if_none:'—' }}</td>{% endfor %}<td class="row-actions">
+    {% if key == 'orders' %}<a href="{% url 'order_detail' obj.pk %}">Открыть</a>{% endif %}
+    {% if key == 'jobs' %}<a href="{% url 'print_job' obj.pk %}">Печать ПЗ</a>{% if can_write and not obj.employee_id %}<form method="post" action="{% url 'assign_job' obj.pk %}">{% csrf_token %}<button type="submit">Автоназначить</button></form>{% endif %}{% endif %}
+    {% if key == 'products' %}<a href="{% url 'print_route' obj.pk %}">Маршрут PDF</a><a href="{% url 'print_operation_cards' obj.pk %}">Операционные карты</a><a href="{% url 'print_tooling_sheet' obj.pk %}">Оснастка</a>{% endif %}
+    {% if key == 'items' %}<a href="{% url 'print_kit_sheet' obj.pk %}">Комплектовочная ведомость</a><a href="{% url 'print_route' obj.product_id %}?item={{ obj.pk }}">МК ЕСТД (проект)</a>{% endif %}
+    {% if key == 'lines' and can_write %}<form method="post" action="{% url 'generate_jobs' obj.pk %}">{% csrf_token %}<button type="submit">Создать ПЗ</button></form>{% endif %}
+    {% if key == 'requirements' and can_write %}<form method="post" action="{% url 'reserve_material' obj.pk %}" class="reserve-form">{% csrf_token %}<input name="quantity" type="number" step="0.001" placeholder="± количество" required style="width:100px"><button type="submit">Резерв</button></form>{% endif %}
+    {% if can_write %}<a class="modal-link" href="{% url 'record_edit' key obj.pk %}">Изменить</a><form method="post" action="{% url 'record_archive' key obj.pk %}" class="archive-form">{% csrf_token %}<input type="hidden" name="reason"><button type="submit">Архив</button></form>{% endif %}
+    {% if key == 'programs' and can_write %}<form method="post" action="{% url 'revise_program' obj.pk %}" class="revision-form">{% csrf_token %}<input type="hidden" name="reason"><button type="submit">Новая версия</button></form>{% endif %}
+  </td></tr>{% empty %}<tr><td colspan="12" class="empty">Нет записей по выбранным фильтрам</td></tr>{% endfor %}
+  </tbody></table></div><p class="hint">Показаны первые 500 записей. Уточните поиск для больших списков.</p>
+</section>
+{% if key == 'routes' and can_write %}<section class="panel"><h2>Заимствование техпроцесса</h2><form method="post" action="{% url 'copy_route' 0 %}" id="copy-route-form" class="filters">{% csrf_token %}<select id="source-product" required><option value="">Изделие-образец</option>{% for product in products %}<option value="{{ product.pk }}">{{ product.name }}</option>{% endfor %}</select><select name="target" required><option value="">Новое изделие</option>{% for product in products %}<option value="{{ product.pk }}">{{ product.name }}</option>{% endfor %}</select><input name="reason" placeholder="Основание копирования" required><button class="button" type="submit">Скопировать маршрут</button></form></section>{% endif %}
+{% if key == 'materials' and can_write %}<section class="panel"><h2>Загрузка остатков из 1С</h2><p>CSV, JSON или XLSX с колонками code, name, unit, stock_quantity, reserved_quantity. Поддерживаются также русские заголовки.</p><form method="post" action="{% url 'import_materials' %}" enctype="multipart/form-data" class="filters">{% csrf_token %}<input type="file" name="file" accept=".csv,.json,.xlsx" required><button class="button" type="submit">Импортировать</button></form></section>{% endif %}
+{% endblock %}

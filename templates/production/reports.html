@@ -1,0 +1,9 @@
+{% extends 'production/base.html' %}
+{% block title %}Отчеты и ПФА{% endblock %}{% block heading %}Отчеты и ПФА{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="panel-head"><div><span class="eyebrow">План и факт</span><h2>Аналитика по заказам</h2></div><div class="row-actions"><a class="button" href="{% url 'export_report_pdf' %}?{{ request.GET.urlencode }}">Скачать PDF</a><a class="button primary" href="{% url 'export_report' %}?{{ request.GET.urlencode }}">Скачать XLSX</a></div></div>
+  <form method="get" class="filters"><select name="department"><option value="">Все подразделения</option>{% for dep in departments %}<option value="{{ dep.pk }}" {% if request.GET.department == dep.pk|stringformat:'s' %}selected{% endif %}>{{ dep.name }}</option>{% endfor %}</select><label>Срок с <input type="date" name="from" value="{{ request.GET.from }}"></label><label>по <input type="date" name="to" value="{{ request.GET.to }}"></label><button class="button" type="submit">Применить</button></form>
+  <div class="table-scroll"><table><thead><tr><th>Заказ</th><th>Заказчик</th><th>Подразделение</th><th>Заказано</th><th>Принято</th><th>Готовность</th><th>План, ч</th><th>Факт, ч</th><th>Брак</th><th>Срок</th><th>Прогноз</th></tr></thead><tbody>{% for order,planned,actual,rejected in rows %}<tr><td><a href="{% url 'order_detail' order.pk %}">{{ order.number }}</a></td><td>{{ order.customer }}</td><td>{{ order.department }}</td><td>{{ order.quantity }}</td><td>{{ order.accepted_quantity }}</td><td>{{ order.progress }}%</td><td>{{ planned|floatformat:2 }}</td><td>{{ actual|floatformat:2 }}</td><td>{{ rejected }}</td><td>{{ order.due_date }}</td><td>{{ order.forecast_date }}</td></tr>{% empty %}<tr><td colspan="11">Нет данных</td></tr>{% endfor %}</tbody></table></div>
+</section>
+{% endblock %}

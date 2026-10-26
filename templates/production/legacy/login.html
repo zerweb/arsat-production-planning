@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Авторизация</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body class="login-page">
+  <div class="login-watermark" aria-hidden="true">
+    <span></span><span></span><span></span><i></i>
+  </div>
+
+  <main class="login-window modern-login">
+    <header class="login-brand">
+      <img class="login-rosatom-logo" src="assets/rosatom-logo.svg" alt="Росатом">
+    </header>
+
+    <form id="login-form" class="login-form" novalidate>
+      <div class="login-intro">
+        <h1>Вход в систему</h1>
+      </div>
+
+      <label for="server">Сервер</label>
+      <input id="server" value="" readonly>
+
+      <label for="username">Логин</label>
+      <input id="username" autocomplete="username" placeholder="Введите логин" required>
+
+      <label for="password">Пароль</label>
+      <input id="password" type="password" autocomplete="current-password" placeholder="Введите пароль" required>
+
+      <div class="login-actions">
+        <button type="submit" class="btn">Войти</button>
+        <button type="button" id="close-login" class="btn">Закрыть</button>
+      </div>
+
+      <p id="login-message" class="login-message" aria-live="polite">
+        Введите логин и пароль
+      </p>
+    </form>
+  </main>
+  <script src="js/auth.js"></script>
+</body>
+</html>
