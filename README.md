@@ -4,19 +4,19 @@ Django-приложение с PostgreSQL. Исходный интерфейс �
 
 ## Установка на сервер
 
-Поддерживается сервер Debian, Ubuntu или Astra Linux с APT и systemd. Нужны права `sudo` и доступ к Git-репозиторию. **Опубликуйте этот каталог в своём репозитории**, затем выполните на сервере одну команду, заменив URL:
+Поддерживается сервер Debian, Ubuntu или Astra Linux с APT и systemd. Нужны права `sudo` и доступ к репозиторию [zerweb/arsat-production-planning](https://github.com/zerweb/arsat-production-planning). Для загрузки и установки выполните на сервере одну команду:
 
 ```bash
-git clone https://github.com/ORG/avt.git /opt/avt && sudo bash /opt/avt/install.sh
+git clone https://github.com/zerweb/arsat-production-planning.git /opt/avt && sudo bash /opt/avt/install.sh
 ```
 
-Для варианта загрузки через `bootstrap.sh`, как в [примере](https://github.com/zerweb/printer-accounting-system), после публикации файла можно использовать:
+Вариант с загрузчиком `bootstrap.sh`, как в [примере](https://github.com/zerweb/printer-accounting-system):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ORG/avt/main/bootstrap.sh | sudo bash -s -- https://github.com/ORG/avt.git
+curl -fsSL https://raw.githubusercontent.com/zerweb/arsat-production-planning/main/bootstrap.sh | sudo bash
 ```
 
-`ORG/avt` — место для адреса **вашего** репозитория; проект из ссылки выше является только примером организации установки. Публикация этого проекта в GitHub не выполняется установщиком.
+Обе команды используют один и тот же репозиторий. Загрузчик создаёт `/opt/avt` только если каталога ещё нет; установщик не очищает существующую базу.
 
 Установщик спросит порт, адрес сайта и режим PostgreSQL: создать локальную базу либо подключить существующую. Затем он создаст Python-окружение, установит закреплённые зависимости, применит миграции, соберёт статику и настроит службы `avt` и Nginx. Для доступа по сети требуется готовый TLS-сертификат и ключ; без них сайт слушает только `127.0.0.1`. Путь к первому паролю администратора выводится в конце установки; пароль создаётся случайно и не хранится в репозитории.
 

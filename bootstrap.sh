@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Однокомандная загрузка из своего Git-репозитория. URL передаётся явно,
-# чтобы установщик никогда не скачивал чужой примерный проект.
-REPOSITORY_URL="${1:-${AVT_REPOSITORY_URL:-}}"
+# Однокомандная загрузка из репозитория проекта. URL можно переопределить
+# аргументом или переменной окружения при развёртывании зеркала.
+REPOSITORY_URL="${1:-${AVT_REPOSITORY_URL:-https://github.com/zerweb/arsat-production-planning.git}}"
 INSTALL_DIR="${AVT_INSTALL_DIR:-/opt/avt}"
 
 if [[ "$EUID" -ne 0 ]]; then
@@ -11,7 +11,7 @@ if [[ "$EUID" -ne 0 ]]; then
     exit 1
 fi
 if [[ ! "$REPOSITORY_URL" =~ ^https://[^[:space:]]+\.git$ ]]; then
-    echo 'Укажите HTTPS URL своего Git-репозитория: sudo bash bootstrap.sh https://host/group/avt.git' >&2
+    echo 'Нужен HTTPS URL Git-репозитория с суффиксом .git.' >&2
     exit 1
 fi
 if [[ -e "$INSTALL_DIR" ]]; then
