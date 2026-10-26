@@ -18,6 +18,7 @@ DB_KEYS = {"host": "PGHOST", "port": "PGPORT", "database": "PGDATABASE",
            "username": "PGUSER", "password": "PGPASSWORD"}
 RUNTIME_DIR = settings.BASE_DIR / ".runtime"
 BACKUP_DIR = settings.BASE_DIR / ".backups"
+MAX_RESTORE_BYTES = 50 * 1024 * 1024  # Совпадает с client_max_body_size 50m в Nginx.
 
 
 def postgres_bin(name):
@@ -122,8 +123,8 @@ def dump_database(destination, config=None):
 
 
 def validate_dump(path):
-    if path.stat().st_size < 5 or path.stat().st_size > 1024 * 1024 * 1024:
-        raise ValueError("Размер файла резервной копии должен быть от 5 байт до 1 ГБ")
+    if path.stat().st_size < 5 or path.stat().st_size > MAX_RESTORE_BYTES:
+        raise ValueError("Размер файла резервной копии должен быть от 5 байт до 50 МБ")
     with path.open("rb") as file:
         if file.read(5) != b"PGDMP":
             raise ValueError("Нужен файл резервной копии PostgreSQL в формате .dump")

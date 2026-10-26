@@ -86,5 +86,6 @@ class UserForm(forms.ModelForm):
             user.set_password(self.cleaned_data["password"])
         if commit:
             user.save()
-            user.groups.set([Group.objects.get(name=self.cleaned_data["role"])])
+            group, _ = Group.objects.get_or_create(name=self.cleaned_data["role"])
+            user.groups.set([group])
         return user

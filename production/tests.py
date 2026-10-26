@@ -16,7 +16,7 @@ from openpyxl import load_workbook
 from . import models as m
 from .legacy_ui import PAGES
 from . import db_admin
-from .forms import REGISTRY, form_for
+from .forms import REGISTRY, UserForm, form_for
 from .estd import route_card_data, render_route_card
 
 
@@ -958,6 +958,15 @@ class SampleImportTests(TestCase):
 
 
 class ReleaseSurfaceTests(TestCase):
+    def test_user_form_creates_role_in_empty_database(self):
+        form = UserForm(data={"username": "new_manager", "first_name": "Иван",
+            "last_name": "Тестовый", "email": "", "is_active": True,
+            "role": "manager", "password": "Secure-random-test-password-2026"})
+        self.assertTrue(form.is_valid(), form.errors)
+        user = form.save()
+        self.assertEqual(list(user.groups.values_list("name", flat=True)), ["manager"])
+        self.assertTrue(user.check_password("Secure-random-test-password-2026"))
+
     def test_login_has_favicon_and_no_published_test_passwords(self):
         response = Client(HTTP_HOST="127.0.0.1").get("/login/")
         self.assertEqual(response.status_code, 200)

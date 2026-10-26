@@ -209,8 +209,8 @@ def backup_restore(request):
         status = json.loads(status_path.read_text(encoding="utf-8")) if status_path.exists() else {"state": "idle"}
         return JsonResponse(status)
     upload = request.FILES.get("file")
-    if not upload or upload.size > 1024 * 1024 * 1024:
-        return JsonResponse({"ok": False, "error": "Выберите файл .dump размером до 1 ГБ"}, status=400)
+    if not upload or upload.size > db_admin.MAX_RESTORE_BYTES:
+        return JsonResponse({"ok": False, "error": "Выберите файл .dump размером до 50 МБ"}, status=400)
     heartbeat = db_admin.RUNTIME_DIR / "supervisor.json"
     try:
         supervisor = json.loads(heartbeat.read_text(encoding="utf-8"))
