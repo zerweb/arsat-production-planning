@@ -12,6 +12,7 @@ NGINX_FILE="/etc/nginx/sites-available/$SERVICE_NAME.conf"
 PYTHON="$PROJECT_ROOT/.venv/bin/python"
 CREDENTIAL_LINES=''
 DB_PASSWORD_CREATED=0
+RESUME_INCOMPLETE=0
 
 fail() { printf 'Ошибка: %s\n' "$*" >&2; exit 1; }
 ask() {
@@ -110,23 +111,37 @@ app_psql() {
     PGPASSWORD="$DB_PASSWORD" PGCONNECT_TIMEOUT=5 psql -X -w --host "$DB_HOST" --port "$DB_PORT" \
         --username "$DB_USER" --dbname "$DB_NAME" -v ON_ERROR_STOP=1 "$@"
 }
+check_database_schema() {
+    local status table_count django_migrations production_order
+    status="$(app_psql -Atqc "SELECT (SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'), to_regclass('public.django_migrations') IS NOT NULL, to_regclass('public.production_order') IS NOT NULL")"
+    IFS='|' read -r table_count django_migrations production_order <<< "$status"
+    if (( table_count > 0 )) && [[ "$django_migrations" != t || "$production_order" != t ]]; then
+        fail 'В БД уже есть таблицы другого приложения без схемы АРСАТ. Укажите пустую или подготовленную базу АРСАТ.'
+    fi
+}
 admin_psql() {
     PGPASSWORD="$DB_ADMIN_PASSWORD" PGCONNECT_TIMEOUT=5 psql -X -w --host "$DB_HOST" --port "$DB_PORT" \
         --username "$DB_ADMIN_USER" --dbname postgres -v ON_ERROR_STOP=1 "$@"
 }
 choose_database() {
-    local default_host default_port role_exists database_exists
+    local default_host default_port default_name default_user default_mode role_exists database_exists
     default_host="$(env_value PGHOST)"; default_port="$(env_value PGPORT)"
     echo 'PostgreSQL: 1 — создать БД на готовом сервере; 2 — подключить готовую БД'
-    DB_MODE="$(ask 'Выберите режим' 1)"
+    if [[ -f "$ENV_FILE" ]]; then default_mode=2; else default_mode=1; fi
+    DB_MODE="$(ask 'Выберите режим' "$default_mode")"
     [[ "$DB_MODE" == 1 || "$DB_MODE" == 2 ]] || fail 'Выберите 1 или 2'
+    if [[ "$DB_MODE" == 1 ]]; then
+        default_name=avt_production; default_user=avt_app
+    else
+        default_name="$(env_value PGDATABASE)"; default_name="${default_name:-avt_production}"
+        default_user="$(env_value PGUSER)"; default_user="${default_user:-avt_app}"
+        echo 'В квадратных скобках показаны текущие значения. Enter оставляет их без изменений.'
+    fi
     DB_HOST="$(ask 'Адрес работающего сервера PostgreSQL' "${default_host:-127.0.0.1}")"
     DB_PORT="$(ask 'Порт PostgreSQL' "${default_port:-5432}")"
     valid_host "$DB_HOST" && valid_port "$DB_PORT" || fail 'Неверный адрес или порт PostgreSQL'
-    DB_NAME="$(ask 'Название базы' "$(env_value PGDATABASE | tr -d '\r')")"
-    DB_NAME="${DB_NAME:-avt_production}"
-    DB_USER="$(ask 'Пользователь приложения в PostgreSQL' "$(env_value PGUSER | tr -d '\r')")"
-    DB_USER="${DB_USER:-avt_app}"
+    DB_NAME="$(ask 'Название базы' "$default_name")"
+    DB_USER="$(ask 'Пользователь приложения в PostgreSQL' "$default_user")"
     valid_name "$DB_NAME" && valid_name "$DB_USER" || fail 'Имя БД и пользователя: строчные латинские буквы, цифры, _'
     if [[ "$DB_MODE" == 1 ]]; then
         DB_ADMIN_USER="$(ask 'Администратор готового PostgreSQL-сервера' postgres)"
@@ -154,6 +169,7 @@ choose_database() {
     fi
     [[ "$DB_PASSWORD" != *$'\n'* && "$DB_PASSWORD" != *$'\r'* ]] || fail 'Пароль БД содержит недопустимые символы'
     app_psql -Atqc 'SELECT 1' | grep -qx 1 || fail 'Приложение не может подключиться к выбранной БД'
+    check_database_schema
 }
 
 write_env() {
@@ -271,23 +287,29 @@ prepare_python() {
 
 apply_database() {
     "$PYTHON" manage.py migrate --noinput
+    local sample_state
+    sample_state="$("$PYTHON" manage.py sample_data_state)"
     if [[ "$IMPORT_SAMPLE" == y || "$IMPORT_SAMPLE" == Y ]]; then
-        "$PYTHON" manage.py import_sample_data
+        case "$sample_state" in
+            empty) "$PYTHON" manage.py import_sample_data; sample_state=sample ;;
+            sample) echo 'Тестовые данные уже загружены; завершаю настройку пользователей.' ;;
+            *) fail 'В выбранной БД уже есть другие данные. Тестовый импорт отменён.' ;;
+        esac
     fi
-    if ! "$PYTHON" manage.py shell -c 'from django.contrib.auth.models import User; import sys; sys.exit(0 if User.objects.filter(is_active=True,is_superuser=True).exists() else 1)' >/dev/null; then
+    if ! "$PYTHON" manage.py shell --no-imports --verbosity 0 -c 'from django.contrib.auth.models import User; import sys; sys.exit(0 if User.objects.filter(is_active=True,is_superuser=True).exists() else 1)' >/dev/null; then
         local admin_password
         admin_password="$(random_password)"
         AVT_ADMIN_PASSWORD="$admin_password" "$PYTHON" manage.py provision_admin
         CREDENTIAL_LINES+="  admin: $admin_password"$'\n'
     fi
-    if [[ "$IMPORT_SAMPLE" == y || "$IMPORT_SAMPLE" == Y ]]; then
+    if [[ "$IMPORT_SAMPLE" == y || "$IMPORT_SAMPLE" == Y || ( "$RESUME_INCOMPLETE" == 1 && "$sample_state" == sample ) ]]; then
         local username password
         while IFS= read -r username; do
             [[ -n "$username" ]] || continue
             password="$(random_password)"
             AVT_NEW_PASSWORD="$password" "$PYTHON" manage.py reset_user_password "$username" --activate
             CREDENTIAL_LINES+="  $username: $password"$'\n'
-        done < <("$PYTHON" manage.py shell -c 'from django.contrib.auth.models import User; print("\n".join(User.objects.exclude(username="admin").order_by("username").values_list("username", flat=True)))')
+        done < <("$PYTHON" manage.py sample_data_state --usernames)
     fi
     "$PYTHON" manage.py check --database default
     "$PYTHON" manage.py collectstatic --noinput --verbosity 0
@@ -340,7 +362,7 @@ show_result() {
         echo 'Существующие пароли пользователей не изменены и не могут быть прочитаны из хешей.'
     fi
     echo 'Пользователи в выбранной базе:'
-    "$PYTHON" manage.py shell -c 'from django.contrib.auth.models import User; [print("  {}: {}".format(u.username, "активен" if u.is_active else "отключён")) for u in User.objects.order_by("username")]'
+    "$PYTHON" manage.py shell --no-imports --verbosity 0 -c 'from django.contrib.auth.models import User; [print("  {}: {}".format(u.username, "активен" if u.is_active else "отключён")) for u in User.objects.order_by("username")]'
     echo 'Служба: sudo systemctl status avt; повторный запуск меню: sudo bash /opt/avt/install.sh'
 }
 
@@ -380,7 +402,13 @@ rollback_settings() {
         rm -f "$NGINX_FILE" "/etc/nginx/sites-enabled/$SERVICE_NAME.conf"
     fi
     nginx -t >/dev/null 2>&1 && systemctl reload nginx || true
-    systemctl restart "$SERVICE_NAME" || true
+    if [[ "$SERVICE_WAS_PRESENT" == 1 ]]; then
+        systemctl restart "$SERVICE_NAME" || true
+    else
+        systemctl disable --now "$SERVICE_NAME" >/dev/null 2>&1 || true
+        rm -f "$SERVICE_FILE"
+        systemctl daemon-reload || true
+    fi
     rm -f "$BACKUP_ENV" "$BACKUP_NGINX"
     exit 1
 }
@@ -389,6 +417,12 @@ modify_settings() {
     [[ -f "$ENV_FILE" && -x "$PYTHON" ]] || fail 'Сначала выполните новую установку'
     load_current_site
     load_current_database
+    SERVICE_WAS_PRESENT=0
+    if [[ -f "$SERVICE_FILE" ]]; then SERVICE_WAS_PRESENT=1
+    else
+        RESUME_INCOMPLETE=1
+        echo 'Найдена незавершённая установка: служба avt отсутствует. После проверки параметров она будет создана.'
+    fi
     echo 'Изменить: 1 — IP/домен, порт и HTTP/HTTPS; 2 — PostgreSQL; 3 — всё вместе'
     local scope
     scope="$(ask 'Выберите настройки' 1)"
@@ -406,11 +440,16 @@ modify_settings() {
     cp "$ENV_FILE" "$BACKUP_ENV"
     if [[ -f "$NGINX_FILE" ]]; then cp "$NGINX_FILE" "$BACKUP_NGINX"; else rm -f "$BACKUP_NGINX"; fi
     trap rollback_settings ERR
-    systemctl stop "$SERVICE_NAME"
+    if systemctl cat "$SERVICE_NAME.service" >/dev/null 2>&1; then
+        systemctl stop "$SERVICE_NAME"
+    fi
     write_env
     apply_database
+    write_service
     write_nginx
-    systemctl restart "$SERVICE_NAME"
+    systemctl daemon-reload
+    systemctl enable --now "$SERVICE_NAME"
+    systemctl enable --now nginx
     systemctl reload nginx
     open_host_firewall
     health_check || rollback_settings

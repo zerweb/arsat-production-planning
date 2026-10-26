@@ -926,6 +926,22 @@ class WorkflowTests(TestCase):
 
 
 class SampleImportTests(TestCase):
+    def test_installer_distinguishes_empty_sample_and_existing_database(self):
+        output = io.StringIO()
+        call_command("sample_data_state", stdout=output)
+        self.assertEqual(output.getvalue().strip(), "empty")
+        call_command("import_sample_data", verbosity=0)
+        output = io.StringIO()
+        call_command("sample_data_state", stdout=output)
+        self.assertEqual(output.getvalue().strip(), "sample")
+        output = io.StringIO()
+        call_command("sample_data_state", usernames=True, stdout=output)
+        self.assertEqual(set(output.getvalue().splitlines()), {"user", "planner", "manager", "supervisor"})
+        User.objects.create_user("extra_user", password="Secure-random-test-password-2026")
+        output = io.StringIO()
+        call_command("sample_data_state", stdout=output)
+        self.assertEqual(output.getvalue().strip(), "populated")
+
     def test_fixture_import_and_first_admin_do_not_publish_passwords(self):
         call_command("import_sample_data", verbosity=0)
         self.assertEqual(m.Order.objects.count(), 3)

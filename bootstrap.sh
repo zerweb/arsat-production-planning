@@ -16,7 +16,12 @@ if [[ ! "$REPOSITORY_URL" =~ ^https://[^[:space:]]+\.git$ ]]; then
 fi
 if [[ -e "$INSTALL_DIR" ]]; then
     if [[ -f "$INSTALL_DIR/manage.py" && -f "$INSTALL_DIR/install.sh" ]]; then
-        echo "Проект уже установлен в $INSTALL_DIR; открываю меню обслуживания."
+        if ! command -v git >/dev/null || [[ "$(git -C "$INSTALL_DIR" remote get-url origin 2>/dev/null)" != "$REPOSITORY_URL" ]]; then
+            echo 'Не удалось проверить Git-репозиторий установленного проекта.' >&2
+            exit 1
+        fi
+        echo "Обновляю проект в $INSTALL_DIR и открываю меню обслуживания."
+        git -C "$INSTALL_DIR" pull --ff-only
         exec bash "$INSTALL_DIR/install.sh"
     fi
     echo "Каталог $INSTALL_DIR уже существует и не является проектом АРСАТ." >&2
