@@ -79,6 +79,13 @@ class UserForm(forms.ModelForm):
             validate_password(password, self.instance)
         return password
 
+    def clean(self):
+        cleaned = super().clean()
+        if (cleaned.get("is_active") and self.instance.pk and
+                not self.instance.has_usable_password() and not cleaned.get("password")):
+            self.add_error("password", "Для активации учётной записи задайте индивидуальный пароль")
+        return cleaned
+
     def save(self, commit=True):
         from django.contrib.auth.models import Group
         user = super().save(commit=False)

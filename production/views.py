@@ -55,8 +55,8 @@ ROLE_ACCESS = {
 ROLE_WRITE = {
     "admin": set(REGISTRY), "manager": set(REGISTRY),
     "planner": {"orders", "items", "programs", "lines", "jobs", "requirements", "downtime"},
-    "technologist": {"orders", "items", "products", "routes", "cutting-norms", "materials"},
-    "normalizer": {"routes", "cutting-norms"},
+    "technologist": {"orders", "items", "products", "routes", "materials"},
+    "normalizer": {"cutting-norms"},
     "supervisor": {"jobs", "events", "quality", "downtime"},
     "economist": set(),
 }
@@ -249,6 +249,9 @@ def record_form(request, key, pk=None):
         raise PermissionDenied
     before = snapshot(instance)
     form = form_for(key, request.POST or None, instance=instance)
+    if key == "routes" and role(request.user) not in ("admin", "manager"):
+        # Технолог готовит маршрут, а утверждает его начальник отдела.
+        form.fields.pop("approved", None)
     if request.method == "POST" and form.is_valid():
         if instance and not request.POST.get("change_reason", "").strip():
             form.add_error(None, "Укажите основание корректировки")
@@ -267,6 +270,8 @@ def save_record(request, key, model, instance, before, form):
     try:
         with transaction.atomic():
             obj = form.save(commit=False)
+            if key == "routes" and role(request.user) not in ("admin", "manager"):
+                obj.approved = False
             if key == "events" and not instance:
                 obj.actor = request.user
             obj.full_clean()
@@ -298,6 +303,8 @@ def archive_record(request, key, pk):
     access(request, key, write=True)
     model = REGISTRY[key][0]
     obj = get_object_or_404(model, pk=pk)
+    if key == "routes" and obj.approved and role(request.user) not in ("admin", "manager"):
+        raise PermissionDenied("Утверждённый маршрут может удалить только руководитель.")
     if key == "events" and role(request.user) not in ("admin", "manager") and not request.user.is_superuser:
         raise PermissionDenied
     if key == "lines" and obj.program.status != "draft":

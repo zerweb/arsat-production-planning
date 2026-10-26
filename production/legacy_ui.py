@@ -289,6 +289,8 @@ def save_user_api(request, user=None):
             raise ValueError("Укажите логин, ФИО и роль")
         if user is None and not password:
             raise ValueError("Для нового пользователя нужен пароль")
+        if user and not user.has_usable_password() and not password:
+            raise ValueError("Для активации учётной записи задайте индивидуальный пароль")
         if User.objects.filter(username=username).exclude(pk=user.pk if user else None).exists():
             raise ValueError("Такой логин уже существует")
         if user and user.is_superuser and new_role != "admin":
@@ -675,6 +677,10 @@ def process_api(request, pk):
     if role(request.user) not in ("admin", "technologist", "manager") and not request.user.is_superuser:
         raise PermissionDenied
     route = get_object_or_404(RouteOperation, pk=pk)
+    if request.method == "PUT" and not request.body and role(request.user) not in ("admin", "manager") and not request.user.is_superuser:
+        raise PermissionDenied
+    if request.method == "DELETE" and route.approved and role(request.user) not in ("admin", "manager") and not request.user.is_superuser:
+        raise PermissionDenied
     if request.method == "PUT" and request.body:
         return save_process_api(request, route)
     try:
@@ -720,6 +726,8 @@ def save_process_api(request, route=None):
                 setattr(route, field, str(data.get(field, getattr(route, field, ""))).strip())
             route.worker_count = int(data.get("worker_count", route.worker_count))
             route.simultaneous_quantity = int(data.get("simultaneous_quantity", route.simultaneous_quantity))
+            if role(request.user) not in ("admin", "manager") and not request.user.is_superuser:
+                route.approved = False
             route.full_clean()
             route.save()
             AuditLog.objects.create(user=request.user, model_name="RouteOperation", object_id=route.pk,

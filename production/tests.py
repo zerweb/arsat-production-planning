@@ -101,6 +101,74 @@ class WorkflowTests(TestCase):
         self.assertEqual(self.client.get("/records/orders/").status_code, 200)
         self.assertEqual(self.client.get("/records/jobs/new/").status_code, 403)
 
+    def test_technologist_prepares_route_but_manager_approves_it(self):
+        route = m.RouteOperation.objects.first()
+        self.client.logout()
+        self.client.login(username="user", password="user")
+        self.assertEqual(self.client.put(f"/api/legacy/processes/{route.pk}/").status_code, 403)
+        form = self.client.get(f"/records/routes/{route.pk}/edit/")
+        self.assertEqual(form.status_code, 200)
+        self.assertNotContains(form, 'name="approved"')
+
+        self.client.logout()
+        self.client.login(username="manager", password="manager")
+        self.assertEqual(self.client.put(f"/api/legacy/processes/{route.pk}/").status_code, 200)
+        route.refresh_from_db()
+        self.assertTrue(route.approved)
+
+        self.client.logout()
+        self.client.login(username="user", password="user")
+        self.assertEqual(self.client.delete(f"/api/legacy/processes/{route.pk}/").status_code, 403)
+        self.assertEqual(self.client.post(f"/records/routes/{route.pk}/archive/", {"reason": "Проверка"}).status_code, 403)
+        data = {field.name: getattr(route, field.attname) or "" for field in route._meta.fields
+                if field.editable and not field.primary_key}
+        data.update({"approved": "on", "change_reason": "Уточнение операции"})
+        self.assertEqual(self.client.post(f"/records/routes/{route.pk}/edit/", data).status_code, 302)
+        route.refresh_from_db()
+        self.assertFalse(route.approved)
+
+    def test_normalizer_can_approve_norms_but_cannot_approve_route(self):
+        user = User.objects.get(username="normalizer_01")
+        user.is_active = True
+        user.set_password("normalizer-test-password")
+        user.save()
+        self.client.logout()
+        self.client.login(username="normalizer_01", password="normalizer-test-password")
+        self.assertEqual(self.client.get("/standards.html").status_code, 200)
+        self.assertEqual(self.client.get("/api/legacy/norming/?year=2026&quarter=4").status_code, 200)
+        self.assertEqual(self.client.put(f"/api/legacy/processes/{m.RouteOperation.objects.first().pk}/").status_code, 403)
+        self.assertEqual(self.client.get("/records/routes/new/").status_code, 403)
+        self.assertEqual(self.client.get("/admin.html").status_code, 403)
+
+    def test_placeholder_account_needs_individual_password_to_activate(self):
+        user = User.objects.get(username="normalizer_01")
+        response = self.client.put(f"/api/admin/users/{user.pk}/", data=json.dumps({
+            "username": user.username, "fullName": "Инженер Нормирования", "role": "normalizer",
+        }), content_type="application/json")
+        self.assertEqual(response.status_code, 400)
+        user.refresh_from_db()
+        self.assertFalse(user.is_active)
+        form = UserForm(instance=user, data={"username": user.username,
+            "first_name": "Инженер", "last_name": "Нормирования", "email": "",
+            "is_active": True, "role": "normalizer", "password": ""})
+        self.assertFalse(form.is_valid())
+        self.assertIn("password", form.errors)
+
+    def test_reference_operation_edit_revokes_route_approval(self):
+        from .legacy_tables import save_operations
+
+        route = m.RouteOperation.objects.select_related("definition").first()
+        definition = route.definition
+        self.assertIsNotNone(definition)
+        route.approved = True
+        route.save(update_fields=["approved"])
+        save_operations([[definition.code, "Исправленная операция", definition.kind,
+                          definition.equipment_name, definition.min_grade,
+                          definition.norm_unit, definition.estd_code, "Да"]])
+        route.refresh_from_db()
+        self.assertEqual(route.name, "Исправленная операция")
+        self.assertFalse(route.approved)
+
     def test_pdf_and_xlsx_exports(self):
         self.assertEqual(self.client.get("/reports/export.pdf")["Content-Type"], "application/pdf")
         self.assertEqual(self.client.get("/reports/export/")["Content-Type"], "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
@@ -1005,7 +1073,10 @@ class SampleImportTests(TestCase):
         self.assertEqual(output.getvalue().strip(), "sample")
         output = io.StringIO()
         call_command("sample_data_state", usernames=True, stdout=output)
-        self.assertEqual(set(output.getvalue().splitlines()), {"user", "planner", "manager", "supervisor"})
+        expected_users = {"user", "planner", "manager", "supervisor"}
+        expected_users.update(f"technologist_{number:02d}" for number in range(2, 11))
+        expected_users.update(f"normalizer_{number:02d}" for number in range(1, 3))
+        self.assertEqual(set(output.getvalue().splitlines()), expected_users)
         User.objects.create_user("extra_user", password="Secure-random-test-password-2026")
         output = io.StringIO()
         call_command("sample_data_state", stdout=output)
@@ -1013,10 +1084,14 @@ class SampleImportTests(TestCase):
 
     def test_fixture_import_and_first_admin_do_not_publish_passwords(self):
         call_command("import_sample_data", verbosity=0)
+        self.assertEqual(User.objects.filter(groups__name="manager").count(), 1)
+        self.assertEqual(User.objects.filter(groups__name="technologist").count(), 10)
+        self.assertEqual(User.objects.filter(groups__name="normalizer").count(), 2)
         self.assertEqual(m.Order.objects.count(), 3)
         self.assertEqual(m.RouteOperation.objects.count(), 3)
         self.assertFalse(User.objects.get(username="admin").has_usable_password())
         self.assertFalse(User.objects.get(username="user").is_active)
+        self.assertFalse(User.objects.get(username="normalizer_01").has_usable_password())
         with self.assertRaises(CommandError):
             call_command("import_sample_data", verbosity=0)
         with patch.dict("os.environ", {"AVT_ADMIN_PASSWORD": "A-new-long-random-password-2026"}):

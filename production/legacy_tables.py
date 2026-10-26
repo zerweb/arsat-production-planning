@@ -78,7 +78,8 @@ def save_operations(rows):
                 if route.name.casefold().startswith(name.casefold()):
                     route.definition = definition
                     route.save(update_fields=["definition"])
-        RouteOperation.objects.filter(definition=definition).update(name=name)
+        # Изменение справочника не должно оставлять прежнее утверждение маршрута.
+        RouteOperation.objects.filter(definition=definition).exclude(name=name).update(name=name, approved=False)
     OperationDefinition.objects.exclude(code__in=codes).update(active=False)
 
 

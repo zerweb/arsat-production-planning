@@ -2637,7 +2637,7 @@ const actionRoles = {
   'add-deviation': ['admin', 'manager', 'supervisor', 'normalizer'],
   'edit-deviation': ['admin', 'manager', 'supervisor', 'normalizer'],
   'delete-deviation': ['admin', 'manager', 'supervisor', 'normalizer'],
-  'approve-process': ['admin', 'manager', 'technologist'],
+  'approve-process': ['admin', 'manager'],
   'calculate-material': ['admin', 'technologist']
 };
 
