@@ -8,3 +8,26 @@
 .user-avatar svg{width:23px;height:23px;fill:none;stroke:currentColor;stroke-width:1.8}.permissions-table td:last-child{min-width:280px;white-space:normal}.permissions-table td:nth-child(2){text-align:center;white-space:nowrap}.hero-stat .progress i{transition:width .6s ease}
 .admin-page [hidden]{display:none!important}.admin-tabs{display:flex;gap:10px;flex-wrap:wrap;margin:0 0 18px}.admin-security-card{margin-top:18px}.admin-security-card .row-actions{display:flex;gap:10px;flex-wrap:wrap}.system-status{display:flex;align-items:center;gap:10px;margin-top:16px;font-size:13px}.system-status-dot{width:10px;height:10px;border-radius:50%;background:#98a8b0}.system-status-dot.online{background:#24955d}.system-status-dot.offline{background:#c83c35}.server-admin-card .status-pill:not(.success){background:#ffe8e5;color:#a92a27}.form-modal footer .ghost-button[data-dialog-close],.form-modal footer .ghost-button.danger{color:#b42e28;border-color:#e0b5b1}#plan-approval-status{color:#526778;font-size:13px}
 .checkbox-field{display:flex;align-items:center;gap:10px;min-height:43px;color:#56616a;font-size:12px;font-weight:700}.checkbox-field input[type="checkbox"],.form-modal input[type="checkbox"]{box-sizing:border-box;width:18px!important;height:18px!important;min-height:18px!important;margin:0;padding:0;accent-color:#0078bf;flex:none;cursor:pointer}.form-modal footer button[type="button"],.backup-dialog [data-order-editor-close],.backup-dialog [data-deviation-report-close],.backup-dialog [data-action^="close-"]{color:#b42e28;border-color:#e0b5b1}.sidebar-product{display:flex;justify-content:center;align-items:center;gap:8px}.sidebar-product .sidebar-health-dot{width:9px;height:9px;border-radius:50%;background:#9daab2;flex:none}.sidebar-health-dot.online{background:#2caf70;box-shadow:0 0 0 3px #2caf7026}.sidebar-health-dot.offline{background:#c94039}.tool-button .tool-icon{width:15px;height:15px;vertical-align:-2px;margin-right:5px}
+
+/* Окно настроек использует компактные значки и отдельную прокрутку списков. */
+.tool-icon{display:inline-block;width:16px;height:16px;vertical-align:-2px;margin-right:6px;filter:invert(33%) sepia(98%) saturate(1674%) hue-rotate(174deg) brightness(90%)}
+.dialog.settings-dialog{box-sizing:border-box;width:min(730px,calc(100% - 24px));max-height:min(760px,calc(100vh - 36px));display:flex;flex-direction:column}
+.settings-dialog .dialog-title{box-sizing:border-box;height:auto;min-height:48px;display:flex;align-items:center;gap:4px;padding:13px 18px;color:#173d59}
+.settings-dialog .settings-layout{min-height:0;flex:1;overflow:auto;grid-template-columns:160px minmax(0,1fr)}
+.settings-dialog .settings-content{padding:18px 20px;min-width:0}
+.settings-dialog .dialog-heading{margin:0 0 16px;text-align:left;font-size:20px}
+.settings-dialog .settings-columns{grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}
+.settings-dialog .settings-columns section>div:first-child{margin:0 0 7px;color:#516779;font-weight:700}
+.settings-dialog .check-list{box-sizing:border-box;height:min(330px,45vh);padding:8px;border:1px solid #d6e3eb;background:#f9fcfe}
+.settings-dialog .check-list label{display:flex;align-items:center;gap:8px;width:auto;min-height:27px;padding:2px 4px;line-height:1.35;color:#2f495b}
+.settings-dialog .check-list input{width:15px;height:15px;margin:0;accent-color:#0078bf;flex:none}
+.settings-dialog [data-settings-panel][hidden],.settings-dialog [data-settings-tab][hidden]{display:none!important}
+.settings-dialog .dialog-actions{flex:none;margin:0;padding:12px 18px!important;border-top:1px solid #e2ebf0}
+.settings-dialog [data-action="save-settings"]{color:#fff;background:#007bbf;border-color:#007bbf}
+.profile-trigger{display:flex;align-items:center;gap:10px;min-width:0;padding:3px 6px;background:transparent;border:0;border-radius:10px;color:inherit;text-align:left;cursor:pointer}
+.profile-trigger:hover{background:#e8f4fa}.profile-trigger:focus-visible{outline:2px solid #087fbd;outline-offset:2px}.profile-trigger .user-meta{min-width:0}
+.security-policy-form .security-policy-description{margin:12px 0 18px;color:#607482;line-height:1.5}
+.security-policy-options{display:grid;gap:10px}
+.security-policy-option{display:flex;align-items:flex-start;gap:12px;padding:14px;border:1px solid #dbe6ed;border-radius:9px;background:#f8fbfd;cursor:pointer}
+.security-policy-option input{margin-top:2px!important}.security-policy-option span{display:grid;gap:4px}.security-policy-option strong{color:#203e52;font-size:13px}.security-policy-option small{color:#607482;font-size:12px;line-height:1.4}
+@media(max-width:650px){.settings-dialog .settings-layout{grid-template-columns:1fr}.settings-dialog .settings-nav{display:flex;flex-wrap:wrap;gap:4px;border-right:0;border-bottom:1px solid #d6e3eb}.settings-dialog .settings-nav button{width:auto}.settings-dialog .settings-content{padding:14px}.settings-dialog .settings-columns{grid-template-columns:1fr}.settings-dialog .check-list{height:200px}.profile-trigger .user-meta{max-width:140px;overflow:hidden;text-overflow:ellipsis}}

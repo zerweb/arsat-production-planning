@@ -99,10 +99,13 @@ function connectSettings() {
     method: 'PUT', headers: apiHeaders(), body: JSON.stringify({ rows })
   }).then(response => { if (!response.ok) throw new Error('Не удалось сохранить настройки'); })
     .catch(error => { legacyNotice(error.message, true); return false; });
-  window.saveSettingsList = list => save(`settings-${list.dataset.settingsList}`,
+  window.persistSettingsList = list => save(`settings-${list.dataset.settingsList}`,
     [...list.querySelectorAll('button')].map(button => [button.textContent.trim()]));
-  window.savePlanPeriods = table => save('settings-periods',
+  window.persistPlanPeriods = table => save('settings-periods',
     [...table.tBodies[0].rows].map(row => [...row.cells].map(cell => cell.textContent.trim())));
+  // Изменения в окне остаются черновиком до нажатия «Сохранить».
+  window.saveSettingsList = () => Promise.resolve();
+  window.savePlanPeriods = () => Promise.resolve();
   const columnPanel = document.querySelector('[data-settings-panel="tables"]');
   const columnRows = () => [...columnPanel.querySelectorAll('section')].flatMap((section, group) =>
     [...section.querySelectorAll('label')].map(label => [String(group), label.textContent.trim(), label.querySelector('input').checked]));
@@ -132,12 +135,12 @@ function connectSettings() {
     .catch(error => legacyNotice(error.message, true));
   lists.forEach(list => fetch(`/api/legacy/table/settings-${list.dataset.settingsList}/`)
     .then(response => response.ok ? response.json() : null)
-    .then(data => { if (data?.rows?.length) renderSettingsList(list, data.rows.map(row => row[0])); })
+    .then(data => { if (data?.saved && Array.isArray(data.rows)) renderSettingsList(list, data.rows.map(row => row[0])); })
     .catch(error => legacyNotice(error.message, true)));
   const periods = document.querySelector('.settings-quarter-table table');
   if (periods) fetch('/api/legacy/table/settings-periods/')
     .then(response => response.ok ? response.json() : null)
-    .then(data => { if (data?.rows?.length) renderPlanPeriods(periods, data.rows); })
+    .then(data => { if (data?.saved && Array.isArray(data.rows)) renderPlanPeriods(periods, data.rows); })
     .catch(error => legacyNotice(error.message, true));
 }
 
@@ -326,11 +329,7 @@ document.addEventListener('click', event => {
       const rows = [...table.tBodies[0].rows].map(existing => existing === row ? values : [...existing.cells].map(cell => cell.textContent.trim()));
       if (!row) rows.push(values);
       if (rows.filter(values2 => values2[0] === values[0]).length > 1) { error.textContent = 'Этот год уже существует'; return; }
-      try {
-        const response = await fetch('/api/legacy/table/settings-periods/', { method: 'PUT', headers: apiHeaders(), body: JSON.stringify({rows}) });
-        const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Не удалось сохранить период');
-        renderPlanPeriods(table, rows); dialog.close(); legacyNotice('Период сохранён');
-      } catch (exc) { error.textContent = exc.message; }
+      renderPlanPeriods(table, rows); dialog.close();
     });
     dialog.showModal(); return;
   }
@@ -766,8 +765,12 @@ function installProfile() {
   if (!panel) return;
   const defaultAvatar = panel.querySelector('.user-avatar');
   if (defaultAvatar) defaultAvatar.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"></circle><path d="M4 21a8 8 0 0 1 16 0"></path></svg>';
-  const button = document.createElement('button'); button.type = 'button'; button.className = 'ghost-button'; button.textContent = 'Профиль';
-  panel.insertBefore(button, panel.querySelector('#logout-button'));
+  const button = document.createElement('button'); button.type = 'button'; button.className = 'profile-trigger';
+  button.setAttribute('aria-label', 'Открыть профиль'); button.setAttribute('aria-haspopup', 'dialog');
+  const name = panel.querySelector('.user-meta');
+  panel.insertBefore(button, defaultAvatar || panel.firstChild);
+  if (defaultAvatar) button.append(defaultAvatar);
+  if (name) button.append(name);
   const dialog = document.createElement('dialog'); dialog.className = 'form-modal';
   dialog.innerHTML = `<form class="form-modal-body"><h2>Мой профиль</h2><div class="form-modal-grid">
     <label class="form-modal-field"><span>Логин</span><input name="username" required maxlength="150"></label>
@@ -808,9 +811,9 @@ function installMaintenance() {
   const settings = document.createElement('button'); settings.className = 'ghost-button'; settings.type = 'button'; settings.textContent = 'Изменение логина и пароля'; actions.append(settings);
   const button = document.createElement('button'); button.className = 'ghost-button'; button.type = 'button'; actions.append(button);
   const dialog = document.createElement('dialog'); dialog.className = 'form-modal';
-  dialog.innerHTML = `<form class="form-modal-body"><h2>Общие настройки безопасности</h2><p>Настройки действуют для всех пользователей при изменении собственного профиля.</p>
-    <label><input type="checkbox" name="allowUsernameChanges"> Разрешить пользователям менять логин</label>
-    <label><input type="checkbox" name="allowPasswordChanges"> Разрешить пользователям менять пароль</label>
+  dialog.innerHTML = `<form class="form-modal-body security-policy-form"><h2>Общие настройки безопасности</h2><p class="security-policy-description">Настройки действуют для всех пользователей при изменении собственного профиля.</p>
+    <div class="security-policy-options"><label class="security-policy-option"><input type="checkbox" name="allowUsernameChanges"><span><strong>Изменение логина</strong><small>Разрешить пользователям менять свой логин</small></span></label>
+    <label class="security-policy-option"><input type="checkbox" name="allowPasswordChanges"><span><strong>Изменение пароля</strong><small>Разрешить пользователям менять свой пароль</small></span></label></div>
     <p role="alert" class="editor-error"></p><footer><button type="button" class="ghost-button danger">Отмена</button><button class="primary-button">Сохранить</button></footer></form>`;
   document.body.append(dialog); const form = dialog.querySelector('form');
   settings.addEventListener('click', async () => {
@@ -1298,6 +1301,7 @@ async function applySavedColumnPreferences(table) {
     : { 'Заказ': 0, 'Стадия': 9, '№ заявки': 11, 'Д. заявки': 12, 'Д. ввода': 13,
         'Год пл.': 6, 'Квартал пл.': 7, 'Тр. Сумма план. по заказу': 19,
         'Тр. Сумма фактич. по заказу': 20, 'Примечание': 14 };
+  Object.values(columns).forEach(index => [...table.rows].forEach(tableRow => { if (tableRow.cells[index]) tableRow.cells[index].hidden = false; }));
   rows.filter(row => row[0] === group && row[2] === false).forEach(row => {
     const index = columns[row[1]];
     if (index === undefined) return;
@@ -1656,13 +1660,18 @@ document.addEventListener('click', async event => {
   }
   if (action === 'save-settings') {
     event.stopPropagation(); event.preventDefault();
+    if (currentRole === 'admin') {
+      const inputs = [...document.querySelectorAll('[data-settings-panel="plan"] fieldset input')];
+      const invalid = inputs.find(input => !input.value.trim() || !Number.isInteger(Number(input.value)) || Number(input.value) < 0);
+      if (invalid) { legacyNotice('Параметры плана должны быть целыми неотрицательными числами', true); invalid.focus(); return; }
+    }
     const saves = [...document.querySelectorAll('[data-settings-list]')]
       .filter(list => currentRole === 'admin' || list.dataset.settingsList !== 'staff')
-      .map(list => saveSettingsList(list));
+      .map(list => persistSettingsList(list));
     saves.push(saveSettingsColumns());
     const periods = document.querySelector('.settings-quarter-table table');
     if (periods && currentRole === 'admin') {
-      saves.push(savePlanPeriods(periods));
+      saves.push(persistPlanPeriods(periods));
       saves.push(saveSettingsPlanInputs());
     }
     Promise.all(saves).then(results => { if (results.every(result => result !== false)) window.location.href = 'orders.html'; });

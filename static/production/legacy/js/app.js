@@ -2256,7 +2256,7 @@ const pageViews = {
     </div>
           </div>
           <footer class="dialog-actions" style="padding:0 10px 8px">
-            <button class="btn" data-action="save-settings">OK</button>
+            <button class="btn" data-action="save-settings">Сохранить</button>
             <button class="btn" data-go="orders.html">Отмена</button>
           </footer>
         </section>

@@ -570,6 +570,21 @@ class WorkflowTests(TestCase):
             self.assertEqual(self.client.get(f"/api/legacy/table/{key}/").status_code, 403)
         self.assertEqual(self.client.get("/api/legacy/table/personnel/").status_code, 403)
 
+    def test_saved_empty_settings_are_distinct_from_missing_settings(self):
+        endpoint = "/api/legacy/table/settings-groups/"
+        m.LegacyTable.objects.filter(key="settings-groups").delete()
+        self.assertFalse(self.client.get(endpoint).json()["saved"])
+        response = self.client.put(endpoint, data=json.dumps({"rows": []}), content_type="application/json")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.client.get(endpoint).json(), {"saved": True, "rows": []})
+
+    def test_other_roles_can_read_but_not_change_column_preferences(self):
+        user = User.objects.get(username="planner")
+        self.client.force_login(user)
+        endpoint = "/api/legacy/table/settings-columns/"
+        self.assertEqual(self.client.get(endpoint).status_code, 200)
+        self.assertEqual(self.client.put(endpoint, data=json.dumps({"rows": []}), content_type="application/json").status_code, 403)
+
     def test_all_working_tabs_load_their_database_data(self):
         endpoints = [
             ("/api/legacy/dashboard/", None),

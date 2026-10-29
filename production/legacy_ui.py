@@ -1181,7 +1181,8 @@ def table_api(request, key):
     if key not in TABLES:
         raise Http404
     can_read_personnel = request.method == "GET" and key == "personnel" and role(request.user) == "planner"
-    if role(request.user) not in TABLE_ROLES[key] and not request.user.is_superuser and not can_read_personnel:
+    can_read_columns = request.method == "GET" and key == "settings-columns"
+    if role(request.user) not in TABLE_ROLES[key] and not request.user.is_superuser and not can_read_personnel and not can_read_columns:
         raise PermissionDenied
     if request.method == "GET":
         if key == "operations":
@@ -1197,7 +1198,7 @@ def table_api(request, key):
         saved = LegacyTable.objects.filter(key=key).first()
         if saved and key != "materials1c":
             rows = [row[:8] for row in saved.rows] if key == "operations" else saved.rows
-            return JsonResponse({"rows": rows})
+            return JsonResponse({"rows": rows, "saved": True})
         if key == "materials1c":
             rows = [[m.code, m.name, m.unit, "ЦС-01", str(m.stock_quantity), str(m.reserved_quantity), str(m.available_quantity), ""] for m in Material.objects.filter(archived=False)]
         elif key == "operations":
@@ -1208,7 +1209,7 @@ def table_api(request, key):
             rows = [[str(e.pk).zfill(3), e.name, e.department.name, e.profession, str(e.grade), "1", "", "Работает"] for e in Employee.objects.select_related("department").filter(archived=False)]
         else:
             rows = []
-        return JsonResponse({"rows": rows})
+        return JsonResponse({"rows": rows, "saved": False})
     try:
         if len(request.body) > 5_000_000:
             raise ValueError("Таблица слишком большая")
