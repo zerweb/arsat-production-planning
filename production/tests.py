@@ -5,12 +5,13 @@ import io
 import zipfile
 import tempfile
 import time
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
 from django.contrib.auth.models import Group, User
 from django.core.cache import cache
 from django.core.management import call_command, CommandError
-from django.test import Client, TestCase
+from django.test import Client, TestCase, SimpleTestCase
 from django.core.files.uploadedfile import SimpleUploadedFile
 from openpyxl import load_workbook
 from . import models as m
@@ -18,6 +19,34 @@ from .legacy_ui import PAGES
 from . import db_admin
 from .forms import REGISTRY, UserForm, form_for
 from .estd import route_card_data, render_route_card
+from tools import pg_tools
+
+
+class PostgreSQLClientSelectionTests(SimpleTestCase):
+    def test_selects_newest_installed_client(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old = Path(directory) / '15' / 'pg_dump'
+            new = Path(directory) / '17' / 'pg_dump'
+            for path in (old, new):
+                path.parent.mkdir()
+                path.touch()
+            def version(args, **kwargs):
+                major = 17 if args[0] == str(new) else 15
+                return SimpleNamespace(returncode=0, stdout=f'pg_dump (PostgreSQL) {major}.10')
+            with patch.dict('os.environ', {'PG_BIN_DIR': ''}), \
+                 patch('tools.pg_tools.Path.glob', return_value=[old, new]), \
+                 patch('tools.pg_tools.shutil.which', return_value=None), \
+                 patch('tools.pg_tools.subprocess.run', side_effect=version):
+                self.assertEqual(pg_tools.postgres_bin('pg_dump'), str(new))
+
+    def test_backup_version_error_explains_which_client_is_needed(self):
+        result = SimpleNamespace(returncode=1, stderr='pg_dump: server version: 17.10; pg_dump version: 15.17')
+        with tempfile.TemporaryDirectory() as directory, \
+             patch('production.db_admin.postgres_bin', return_value='pg_dump'), \
+             patch('production.db_admin.subprocess.run', return_value=result):
+            with self.assertRaisesRegex(RuntimeError, 'postgresql-client-17'):
+                db_admin.dump_database(Path(directory) / 'backup.sql', {
+                    'password': 'test', 'host': 'localhost', 'port': '5432', 'username': 'test', 'database': 'test'})
 
 
 class WorkflowTests(TestCase):
@@ -408,6 +437,39 @@ class WorkflowTests(TestCase):
         self.assertEqual(product.name, original_name)
         self.assertEqual(second_item.product_id, product.pk)
         self.assertNotEqual(first_item.product_id, product.pk)
+
+    def test_order_editor_saves_fields_and_preserves_shared_routes_and_jobs(self):
+        job = m.Job.objects.select_related("program_line__order_item__order", "operation__product").first()
+        item = job.program_line.order_item
+        product = item.product
+        other_order = m.Order.objects.exclude(pk=item.order_id).first()
+        m.OrderItem.objects.create(order=other_order, product=product, quantity=1)
+        previous_route_count = product.route.count()
+        previous_hours = sum((route.batch_hours(item.quantity) for route in product.route.filter(approved=True)), Decimal("0"))
+        payload = {"item_id": item.pk, "number": "EDIT-ALL-001", "customer": "Новый заказчик",
+            "object_name": "Объект испытания", "product": "Изделие исправлено", "drawing": "Ч-ИСП-01",
+            "drawing_count": 7, "quantity": item.quantity + 2, "priority": 4,
+            "cost_code": "ЗАТ-27", "invoice": "НАК-42",
+            "request_number": "ЗАЯВКА-123", "request_date": "2026-08-01",
+            "registration_date": "2026-08-02", "start_date": "2026-08-03",
+            "due_date": "2026-12-29", "status": "work", "note": "Проверка изменений"}
+        response = self.client.put(f"/api/legacy/orders/{item.order_id}/", data=json.dumps(payload), content_type="application/json")
+        self.assertEqual(response.status_code, 200, response.content)
+        item.refresh_from_db(); job.refresh_from_db()
+        self.assertEqual(item.product.name, payload["product"])
+        self.assertEqual(item.product.drawing, payload["drawing"])
+        self.assertEqual(item.drawing_count, 7)
+        self.assertEqual(item.object_name, payload["object_name"])
+        self.assertEqual(item.cost_code, payload["cost_code"])
+        self.assertEqual(item.invoice, payload["invoice"])
+        self.assertEqual(item.quantity, payload["quantity"])
+        self.assertEqual(item.order.number, payload["number"])
+        self.assertEqual(item.order.request_number, payload["request_number"])
+        self.assertEqual(item.order.status, "work")
+        self.assertEqual(item.product.route.count(), previous_route_count)
+        self.assertEqual(job.operation.product_id, item.product_id)
+        self.assertEqual(sum((route.batch_hours(item.quantity - 2) for route in item.product.route.filter(approved=True)), Decimal("0")), previous_hours)
+        self.assertTrue(m.OrderItem.objects.filter(order=other_order, product=product).exists())
 
     def test_duplicate_order_number_returns_validation_error(self):
         original = m.Order.objects.first()
@@ -928,6 +990,24 @@ class WorkflowTests(TestCase):
         self.assertEqual(item.hours, Decimal("3.5"))
         self.assertEqual(self.client.delete(f"/api/legacy/deviations/{pk}/").status_code, 200)
         self.assertFalse(m.Downtime.objects.filter(pk=pk).exists())
+
+    def test_deviation_uses_selected_job_and_keeps_it_on_edit(self):
+        job = m.Job.objects.select_related("program_line__order_item__order").first()
+        order = job.program_line.order_item.order
+        jobs = self.client.get("/api/legacy/deviations/").json()["jobs"]
+        self.assertTrue(any(entry["id"] == job.pk and entry["order"] == order.number for entry in jobs))
+        payload = {"order": order.number, "job_id": job.pk, "date": "2026-10-14", "hours": "2.5", "reason": "Нет материала"}
+        created = self.client.post("/api/legacy/deviations/", data=json.dumps(payload), content_type="application/json")
+        self.assertEqual(created.status_code, 200, created.content)
+        pk = created.json()["deviation"]["id"]
+        self.assertEqual(created.json()["deviation"]["job_id"], job.pk)
+        payload["hours"] = "3"
+        response = self.client.put(f"/api/legacy/deviations/{pk}/", data=json.dumps(payload), content_type="application/json")
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(m.Downtime.objects.get(pk=pk).job_id, job.pk)
+        payload["job_id"] = 99999999
+        self.assertEqual(self.client.put(f"/api/legacy/deviations/{pk}/", data=json.dumps(payload), content_type="application/json").status_code, 400)
+        self.assertEqual(m.Downtime.objects.get(pk=pk).job_id, job.pk)
 
     def test_login_redirect_rejects_external_destinations(self):
         for destination in ("https://outside.example/steal", "//outside.example/steal"):

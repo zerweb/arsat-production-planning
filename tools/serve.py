@@ -9,6 +9,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from pg_tools import postgres_bin
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,8 +39,7 @@ def worker_env():
 
 
 def pg_bin(name):
-    candidate = Path(os.getenv("PG_BIN_DIR", r"C:\OSPanel\modules\database\PostgreSQL-14-Win10\bin")) / name
-    return str(candidate) if candidate.is_file() else name
+    return postgres_bin(name)
 
 
 def status(state, message, backup=""):

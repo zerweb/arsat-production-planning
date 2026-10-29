@@ -2855,29 +2855,24 @@ function selectRow(row) {
   updateOrderDetails(row);
 }
 
-const orderStageDates = {
-  '1256': ['27.03.2008', '', '', '', '', '', '04.02.2016', '17.05.2016', '17.05.2016', '25.05.2016', '25.05.2016', ''],
-  '1587': ['21.11.2013', '', '', '', '', '', '10.06.2014', '10.06.2014', '10.06.2014', '30.06.2014', '30.06.2014', '13.02.2015'],
-  '3600': ['03.03.2016', '', '', '', '', '', '', '', '', '', '', '']
-};
-
 function renderOrderItems(cells, orderNumber) {
   const body = document.querySelector('#portfolio-items-body');
   if (!body) return;
-  const dates = orderStageDates[orderNumber] || [cells[13] || '', '', '', '', '', '', '', '', '', '', '', ''];
-  const values = [
-    cells[1], cells[3], cells[4], cells[2], cells[5], cells[8], cells[15], cells[9],
-    cells[17], cells[10] ? `${cells[10]} - плановый` : '', ...dates
-  ];
-  const row = document.createElement('tr');
-  values.forEach((value) => {
-    const cell = document.createElement('td');
-    cell.textContent = value || '';
-    row.append(cell);
+  const items = [...document.querySelectorAll('.data-grid tbody tr[data-item-pk]')]
+    .filter(row => row.dataset.order === orderNumber);
+  body.replaceChildren();
+  items.forEach((source, index) => {
+    const itemCells = [...source.cells].map(cell => cell.textContent.trim());
+    const dates = [itemCells[13] || '', '', '', '', '', '', '', '', '', '', '', ''];
+    const values = [index + 1, itemCells[3], itemCells[4], itemCells[2], itemCells[5], itemCells[8],
+      itemCells[15], itemCells[9], itemCells[17], itemCells[10], ...dates];
+    const row = body.insertRow();
+    row.dataset.itemPk = source.dataset.itemPk;
+    if (source.classList.contains('selected')) row.classList.add('selected');
+    values.forEach(value => { row.insertCell().textContent = value || ''; });
   });
-  body.replaceChildren(row);
   const count = document.querySelector('#portfolio-items-count');
-  if (count) count.textContent = `${cells[8] || 1} ед.`;
+  if (count) count.textContent = `${items.reduce((total, row) => total + (Number(row.cells[8].textContent) || 0), 0)} ед.`;
 }
 
 function renderProductCard(cells) {
@@ -2888,8 +2883,8 @@ function renderProductCard(cells) {
     name: cells[3],
     drawing: cells[4],
     drawingCount: cells[5],
-    unaccounted: cells[15] === '0%' ? '0%' : '20%',
-    labor: cells[18] || '301,89 н.ч.',
+    unaccounted: '—',
+    labor: cells[19] || '0',
     orders: cells[0]
   };
   title.textContent = details.name || 'Изделие';
@@ -2904,11 +2899,11 @@ function updateOrderDetails(row) {
   const cells = [...row.cells].map((cell) => cell.textContent.trim());
   const values = {
     number: row.dataset.order || cells[0],
-    year: cells[5] || cells[6],
-    quarter: cells[6] || cells[7],
-    stage: cells[1] || cells[9],
-    request: cells[2] || cells[10],
-    note: cells[7] || cells[14]
+    year: cells[6],
+    quarter: cells[7],
+    stage: cells[9],
+    request: cells[11],
+    note: cells[14]
   };
   document.querySelectorAll('[data-order-detail]').forEach((field) => {
     field.value = values[field.dataset.orderDetail] || '';

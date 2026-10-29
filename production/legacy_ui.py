@@ -5,6 +5,7 @@ import os
 import time
 import tempfile
 import subprocess
+from copy import copy
 import psycopg
 from decimal import Decimal, InvalidOperation
 from datetime import date, datetime, timedelta
@@ -740,7 +741,7 @@ def save_process_api(request, route=None):
 def deviation_payload(item):
     order = item.job.program_line.order_item.order
     product = item.job.program_line.order_item.product
-    return {"id": item.pk, "order": order.number, "customer": order.customer.name,
+    return {"id": item.pk, "job_id": item.job_id, "order": order.number, "customer": order.customer.name,
         "product": product.name, "drawing": product.drawing, "date": item.date.isoformat(),
         "reason": item.note or item.reason, "hours": str(item.hours), "quantity": item.job.quantity}
 
@@ -752,7 +753,12 @@ def deviations_api(request):
     if request.method == "GET":
         items = Downtime.objects.select_related("job__program_line__order_item__order__customer",
             "job__program_line__order_item__product").order_by("-date", "-pk")
-        return JsonResponse({"deviations": [deviation_payload(item) for item in items]})
+        jobs = Job.objects.filter(program_line__order_item__order__archived=False).select_related(
+            "program_line__order_item__order", "program_line__order_item__product", "operation")
+        return JsonResponse({"deviations": [deviation_payload(item) for item in items],
+            "jobs": [{"id": job.pk, "order": job.program_line.order_item.order.number,
+                "label": f"{job.program_line.order_item.product.name} — {job.operation.number:02} {job.operation.name} (задание {job.pk})"}
+                for job in jobs]})
     return save_deviation_api(request)
 
 
@@ -782,7 +788,14 @@ def save_deviation_api(request, item=None):
         event_date = date.fromisoformat(str(data.get("date", "")))
         if not reason or hours <= 0:
             raise ValueError("Укажите причину и число часов больше нуля")
-        job = Job.objects.filter(program_line__order_item__order__number=order_number).first()
+        jobs = Job.objects.filter(program_line__order_item__order__number=order_number,
+            program_line__order_item__order__archived=False)
+        if data.get("job_id"):
+            job = jobs.filter(pk=int(data["job_id"])).first()
+        elif item and item.job.program_line.order_item.order.number == order_number:
+            job = item.job
+        else:
+            job = jobs.first()
         if not job:
             raise ValueError("Для заказа нет производственного задания")
         with transaction.atomic():
@@ -897,12 +910,13 @@ def orders_api(request):
                     "drawing": item.product.drawing,
                     "quantity": item.quantity, "drawing_count": item.drawing_count,
                     "object_name": item.object_name, "batch": item.batch,
+                    "cost_code": item.cost_code, "invoice": item.invoice,
                     "machine": item.equipment.name if item.equipment else "", "cnc_program": item.cnc_program,
                     "one_c_code": item.one_c_code,
                     "start_date": order.start_date.isoformat(), "due_date": order.due_date.isoformat(),
                     "registration_date": order.registration_date.isoformat() if order.registration_date else "",
                     "request_date": order.request_date.isoformat() if order.request_date else "",
-                    "priority": order.priority, "status": order.get_status_display(),
+                    "priority": order.priority, "status": order.get_status_display(), "status_code": order.status,
                     "progress": order.progress, "request_number": order.request_number,
                     "note": order.note, "norm_per_item": str(planned_hours / item.quantity),
                     "planned_hours": str(planned_hours), "actual_hours": str(actual_hours),
@@ -957,6 +971,8 @@ def orders_api(request):
                 order_item = OrderItem(order=order, product=product, quantity=quantity,
                     drawing_count=int(item.get("drawing_count", 1)),
                     object_name=str(item.get("object_name", "")).strip(),
+                    cost_code=str(item.get("cost_code", data.get("cost_code", ""))).strip(),
+                    invoice=str(item.get("invoice", "")).strip(),
                     batch=str(item.get("batch", "")), equipment=equipment,
                     cnc_program=str(data.get("cnc_program", "")), one_c_code=str(data.get("one_c_code", "")))
                 order_item.full_clean()
@@ -1067,6 +1083,8 @@ def order_api(request, pk):
                     order.number = str(data["number"]).strip()
                 if data.get("priority"):
                     order.priority = int(data["priority"])
+                if "status" in data:
+                    order.status = str(data["status"])
                 order.request_number = str(data.get("request_number", order.request_number))
                 if "registration_date" in data:
                     order.registration_date = date.fromisoformat(data["registration_date"]) if data["registration_date"] else None
@@ -1086,15 +1104,53 @@ def order_api(request, pk):
                 drawing = str(data.get("drawing", item.product.drawing)).strip()
                 if not product_name:
                     raise ValueError("Укажите наименование изделия")
+                operation_map = {}
                 if (product_name, drawing) != (item.product.name, item.product.drawing):
-                    item.product, _ = Product.objects.get_or_create(name=product_name, drawing=drawing)
+                    original = item.product
+                    target = Product.objects.filter(name=product_name, drawing=drawing).first()
+                    if target and Job.objects.filter(program_line__order_item=item).exists():
+                        raise ValueError("Нельзя заменить изделие с заданиями на другое существующее изделие")
+                    if target:
+                        item.product = target
+                    elif not OrderItem.objects.filter(product=original).exclude(pk=item.pk).exists():
+                        original.name, original.drawing = product_name, drawing
+                        original.full_clean()
+                        original.save(update_fields=["name", "drawing"])
+                    else:
+                        # Для общей карточки создаём копию, сохраняя её маршрут и нормативы.
+                        target = copy(original)
+                        target.pk = None
+                        target.name, target.drawing = product_name, drawing
+                        target.full_clean()
+                        target.save()
+                        for route in original.route.all():
+                            new_route = copy(route)
+                            new_route.pk = None
+                            new_route.product = target
+                            new_route.save()
+                            operation_map[route.pk] = new_route.pk
+                            try:
+                                norm = copy(route.cutting_norm)
+                            except RouteOperation.cutting_norm.RelatedObjectDoesNotExist:
+                                continue
+                            norm.pk = None
+                            norm.operation = new_route
+                            norm.save()
+                        item.product = target
                 item.quantity = int(data.get("quantity", item.quantity))
                 if "drawing_count" in data:
                     item.drawing_count = int(data["drawing_count"])
                 if "object_name" in data:
                     item.object_name = str(data["object_name"]).strip()
+                if "cost_code" in data:
+                    item.cost_code = str(data["cost_code"]).strip()
+                if "invoice" in data:
+                    item.invoice = str(data["invoice"]).strip()
                 item.full_clean()
                 item.save()
+                for old_operation, new_operation in operation_map.items():
+                    Job.objects.filter(program_line__order_item=item, operation_id=old_operation).update(operation_id=new_operation)
+                order.full_clean()
                 action = "update"
             AuditLog.objects.create(user=request.user, model_name="Order", object_id=order.pk,
                 action=action, reason=reason, before=before, after=snapshot(order))

@@ -254,6 +254,8 @@ class OrderItem(models.Model):
     quantity = models.PositiveIntegerField("Количество")
     drawing_count = models.PositiveIntegerField("Количество чертежей", default=1)
     object_name = models.CharField("Объект изделия", max_length=200, blank=True)
+    cost_code = models.CharField("Шифр затрат", max_length=80, blank=True)
+    invoice = models.CharField("Накладная", max_length=100, blank=True)
     equipment = models.ForeignKey(Equipment, on_delete=models.PROTECT, null=True, blank=True, verbose_name="Станок / оборудование")
     cnc_program = models.CharField("Программа ЧПУ", max_length=120, blank=True)
     one_c_code = models.CharField("Код номенклатуры 1С", max_length=80, blank=True)

@@ -19,6 +19,16 @@ function installTppFields() {
     const hours = document.createElement('label');
     hours.innerHTML = '<span>Часы</span><input class="field" data-deviation-field="hours" type="number" min="0.01" step="0.01" value="8">';
     deviationForm.querySelector('[data-deviation-field="date"]')?.closest('label')?.after(hours);
+    const reason = deviationForm.querySelector('[data-deviation-field="reason"]');
+    ['Нет материала', 'Неисправность оборудования', 'Нехватка персонала', 'Технологическая проблема', 'Контроль качества', 'Прочее']
+      .forEach(value => reason.add(new Option(value, value)));
+    const today = new Date();
+    deviationForm.querySelector('[data-deviation-field="date"]').value =
+      `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    deviationForm.querySelector('[data-deviation-field="order"]').addEventListener('input', () => updateDeviationJobs());
+    const [year, month] = document.querySelectorAll('.deviation-period-grid select');
+    year.dataset.deviationPeriod = 'year'; month.dataset.deviationPeriod = 'month';
+    year.addEventListener('change', filterDeviations); month.addEventListener('change', filterDeviations);
   }
 }
 
@@ -812,6 +822,26 @@ async function openProductEstdEditor() {
 }
 
 let editingDeviationPk = null;
+let deviationJobs = [];
+
+function updateDeviationJobs(selectedId = '') {
+  const order = document.querySelector('[data-deviation-field="order"]')?.value.trim();
+  const work = document.querySelector('[data-deviation-field="work"]');
+  if (!work) return;
+  work.replaceChildren(new Option('Выберите задание', ''));
+  deviationJobs.filter(job => job.order === order).forEach(job => work.add(new Option(job.label, String(job.id))));
+  if (selectedId) work.value = String(selectedId);
+  else if (work.options.length === 2) work.selectedIndex = 1;
+}
+
+function filterDeviations() {
+  const year = document.querySelector('[data-deviation-period="year"]')?.value || '';
+  const month = document.querySelector('[data-deviation-period="month"]')?.value || '';
+  document.querySelectorAll('.deviation-page .data-grid tbody tr').forEach(row => {
+    row.hidden = Boolean((year && row.dataset.date.slice(0, 4) !== year) ||
+      (month && row.dataset.date.slice(5, 7) !== month));
+  });
+}
 
 async function loadDeviationsFromServer() {
   if (document.body.dataset.page !== 'form2') return;
@@ -819,12 +849,14 @@ async function loadDeviationsFromServer() {
   if (!response.ok) throw new Error('Не удалось загрузить отклонения');
   const body = document.querySelector('.deviation-page .data-grid tbody');
   const data = await response.json();
+  deviationJobs = data.jobs || [];
   body.replaceChildren();
   data.deviations.forEach((item, index) => {
     const row = body.insertRow();
     if (index === 0) row.classList.add('selected');
     row.dataset.order = item.order;
     row.dataset.deviationPk = item.id;
+    row.dataset.jobId = item.job_id;
     row.dataset.date = item.date;
     row.dataset.hours = item.hours;
     row.dataset.reason = item.reason;
@@ -837,9 +869,22 @@ async function loadDeviationsFromServer() {
   if (data.deviations.length) {
     document.querySelector('[data-deviation-field="order"]').value = data.deviations[0].order;
   } else {
-    const orders = await fetch('/api/legacy/orders/').then(result => result.json());
-    if (orders.orders.length) document.querySelector('[data-deviation-field="order"]').value = orders.orders[0].number;
+    document.querySelector('[data-deviation-field="order"]').value = deviationJobs[0]?.order || '';
   }
+  updateDeviationJobs(data.deviations[0]?.job_id || '');
+  const year = document.querySelector('[data-deviation-period="year"]');
+  const month = document.querySelector('[data-deviation-period="month"]');
+  const oldYear = year.value, oldMonth = month.value;
+  year.replaceChildren(new Option('Все годы', ''));
+  [...new Set(data.deviations.map(item => item.date.slice(0, 4)))].sort().reverse()
+    .forEach(value => year.add(new Option(value, value)));
+  month.replaceChildren(new Option('Все месяцы', ''));
+  for (let index = 0; index < 12; index++) {
+    const value = String(index + 1).padStart(2, '0');
+    month.add(new Option(new Intl.DateTimeFormat('ru-RU', { month: 'long' }).format(new Date(2024, index, 1)), value));
+  }
+  year.value = oldYear || ''; month.value = oldMonth || '';
+  filterDeviations();
 }
 
 async function loadOrdersFromServer() {
@@ -856,9 +901,9 @@ async function loadOrdersFromServer() {
       const values = [item.number, '1', item.object_name || item.customer, item.product, item.drawing,
         String(item.drawing_count),
         item.due_date.slice(0, 4), String(Math.floor((Number(item.due_date.slice(5, 7)) - 1) / 3) + 1),
-         item.quantity, item.status, item.priority, item.request_number, legacyDate(item.request_date), legacyDate(item.registration_date || item.start_date),
-        item.note, '', `${item.progress}%`, '', item.norm_per_item,
-        item.planned_hours, item.actual_hours, legacyDate(item.due_date), '', '', item.executors || ''];
+         item.quantity, item.status, item.priority, item.request_number, legacyDate(item.request_date), legacyDate(item.registration_date),
+        item.note, '', `${item.progress}%`, item.cost_code || '', item.norm_per_item,
+        item.planned_hours, item.actual_hours, legacyDate(item.due_date), item.invoice || '', '', item.executors || ''];
       const row = body.insertRow();
       if (index === 0) row.classList.add('selected');
       row.dataset.order = item.number;
@@ -867,6 +912,8 @@ async function loadOrdersFromServer() {
       row.dataset.itemPk = item.item_id;
       row.dataset.productPk = item.product_id;
       row.dataset.dueDate = item.due_date;
+      row.dataset.startDate = item.start_date;
+      row.dataset.statusCode = item.status_code;
       row.dataset.department = item.department;
       for (let i = 0; i < count; i += 1) row.insertCell().textContent = values[i] ?? '';
     });
@@ -1001,7 +1048,7 @@ async function saveLegacyOrder(exitAfter) {
   })).filter(item => item.name);
   const payload = { number: get('order'), customer: get('object'), request_number: get('request'),
     start_date: start, due_date: due, registration_date: get('registration-date'),
-    request_date: get('request-date'), priority: Number(get('priority') || 2), note: get('note'),
+    request_date: get('request-date'), priority: Number(get('priority') || 2), note: get('note'), cost_code: get('cost-code'),
     machine: get('machine'), cnc: get('cnc'), cnc_control: get('cnc-control'),
     cnc_program: get('cnc-program'), one_c_code: get('one-c-code'), items };
   if (!payload.number || !payload.customer || !start || !due || !items.length) {
@@ -1020,33 +1067,88 @@ async function saveLegacyOrder(exitAfter) {
   } catch (error) { legacyNotice(error.message, true); }
 }
 
-async function saveSelectedOrder(row) {
-  const cells = row.cells;
-  const payload = { item_id: row.dataset.itemPk, number: cells[0].textContent.trim(),
-    customer: row.dataset.customer || cells[2].textContent.trim(),
-    object_name: cells[2].textContent.trim(),
-    drawing_count: Number(cells[5].textContent.trim()),
-    registration_date: cells[13].querySelector('input')?.value || isoDate(cells[13].textContent),
-    request_date: cells[12].querySelector('input')?.value || isoDate(cells[12].textContent),
-    due_date: cells[21].querySelector('input')?.value || isoDate(cells[21].textContent),
-    product: cells[3].textContent.trim(), drawing: cells[4].textContent.trim(),
-    quantity: Number(cells[8].textContent.trim()), priority: Number(cells[10].textContent.trim()) || 2,
-    request_number: cells[11].textContent.trim(), note: cells[14].textContent.trim(),
-    reason: 'Исправление в портфеле заказов' };
-  const response = await fetch(`/api/legacy/orders/${row.dataset.orderPk}/`, { method: 'PUT', headers: apiHeaders(), body: JSON.stringify(payload) });
-  const result = await response.json();
-  if (!response.ok) throw new Error(result.error || 'Не удалось сохранить');
-  for (const [index, key] of [[12, 'request_date'], [13, 'registration_date'], [21, 'due_date']])
-    cells[index].textContent = legacyDate(payload[key]);
-  row.dataset.dueDate = payload.due_date;
-  [...cells].forEach(cell => cell.contentEditable = 'false');
-  row.dataset.editing = 'false';
-  row.dataset.order = payload.number;
-  document.querySelector('[data-action="edit-order"]')?.replaceChildren(document.createTextNode('Изменить изделие'));
-  legacyNotice('Изменения сохранены');
+function openOrderEditor(row) {
+  let dialog = document.querySelector('#order-edit-dialog');
+  if (!dialog) {
+    document.body.insertAdjacentHTML('beforeend', `<dialog class="backup-dialog product-list-dialog" id="order-edit-dialog">
+      <section class="content-card"><div class="card-heading"><h3>Изменить заказ и изделие</h3>
+      <button type="button" class="ghost-button" data-order-editor-close>Закрыть</button></div>
+      <form id="order-edit-form"><div class="order-filter-fields">
+      <label>Номер заказа <input name="number" maxlength="50" required></label>
+      <label>Заказчик <input name="customer" maxlength="200" required></label>
+      <label>Объект <input name="object_name" maxlength="200"></label>
+      <label>Наименование изделия <input name="product" maxlength="200" required></label>
+      <label>Чертёж <input name="drawing" maxlength="100"></label>
+      <label>Количество чертежей <input name="drawing_count" type="number" min="1" step="1" required></label>
+      <label>Количество изделий <input name="quantity" type="number" min="1" step="1" required></label>
+      <label>Приоритет <input name="priority" type="number" min="1" max="32767" step="1" required></label>
+      <label>Номер заявки <input name="request_number" maxlength="80"></label>
+      <label>Шифр затрат <input name="cost_code" maxlength="80"></label>
+      <label>Накладная <input name="invoice" maxlength="100"></label>
+      <label>Дата заявки <input name="request_date" type="date"></label>
+      <label>Дата ввода <input name="registration_date" type="date"></label>
+      <label>Плановый запуск <input name="start_date" type="date" required></label>
+      <label>Плановый выпуск <input name="due_date" type="date" required></label>
+      <label>Состояние <select name="status"><option value="draft">Проект</option><option value="planned">Запланирован</option><option value="work">В работе</option><option value="risk">Под риском</option><option value="done">Исполнен</option><option value="closed">Закрыт</option></select></label>
+      <label>Примечание <input name="note"></label></div>
+      <p>Показатели выполнения и трудоёмкости рассчитываются по связанным данным.</p>
+      <p data-order-editor-error role="alert"></p>
+      <div class="product-editor-actions"><button class="primary-button" type="submit">Сохранить</button></div></form></section></dialog>`);
+    dialog = document.querySelector('#order-edit-dialog');
+    dialog.querySelector('[data-order-editor-close]').addEventListener('click', () => dialog.close());
+    dialog.querySelector('form').addEventListener('submit', async event => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const payload = Object.fromEntries(new FormData(form));
+      payload.item_id = form.dataset.itemPk;
+      payload.reason = 'Исправление в портфеле заказов';
+      try {
+        const response = await fetch(`/api/legacy/orders/${form.dataset.orderPk}/`, {
+          method: 'PUT', headers: apiHeaders(), body: JSON.stringify(payload)
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Не удалось сохранить');
+        dialog.close();
+        await loadOrdersFromServer();
+        const refreshed = [...document.querySelectorAll('.data-grid tbody tr')].find(item => item.dataset.itemPk === payload.item_id);
+        if (refreshed) {
+          refreshed.closest('tbody').querySelectorAll('tr').forEach(item => item.classList.remove('selected'));
+          refreshed.classList.add('selected'); updateOrderDetails(refreshed);
+        }
+        legacyNotice('Изменения сохранены');
+      } catch (error) { dialog.querySelector('[data-order-editor-error]').textContent = error.message; }
+    });
+  }
+  const form = dialog.querySelector('form'), cells = row.cells;
+  dialog.querySelector('[data-order-editor-error]').textContent = '';
+  form.dataset.itemPk = row.dataset.itemPk; form.dataset.orderPk = row.dataset.orderPk;
+  const values = { number: cells[0].textContent.trim(), customer: row.dataset.customer,
+    object_name: cells[2].textContent.trim(), product: cells[3].textContent.trim(),
+    drawing: cells[4].textContent.trim(), drawing_count: cells[5].textContent.trim(),
+    quantity: cells[8].textContent.trim(), priority: cells[10].textContent.trim(),
+    request_number: cells[11].textContent.trim(), request_date: isoDate(cells[12].textContent),
+    registration_date: isoDate(cells[13].textContent), start_date: row.dataset.startDate,
+    due_date: row.dataset.dueDate, status: row.dataset.statusCode, note: cells[14].textContent.trim(),
+    cost_code: cells[17].textContent.trim(), invoice: cells[22].textContent.trim() };
+  Object.entries(values).forEach(([name, value]) => { form.elements[name].value = value || ''; });
+  dialog.showModal(); form.elements.number.focus();
 }
 
 document.addEventListener('click', async event => {
+  const portfolioItem = event.target.closest('#portfolio-items-body tr[data-item-pk]');
+  if (portfolioItem) {
+    const source = [...document.querySelectorAll('.data-grid tbody tr[data-item-pk]')]
+      .find(row => row.dataset.itemPk === portfolioItem.dataset.itemPk);
+    if (source) selectRow(source);
+    return;
+  }
+  const clickedRow = event.target.closest('.data-grid tbody tr');
+  const editingRow = clickedRow?.closest('tbody')?.querySelector('tr[data-editing="true"]');
+  if (editingRow && clickedRow !== editingRow) {
+    event.preventDefault(); event.stopPropagation();
+    legacyNotice('Сначала сохраните изменения выбранной строки', true);
+    return;
+  }
   if (event.target.closest('#logout-button')) {
     event.stopPropagation(); event.preventDefault();
     await fetch('/logout/', { method: 'POST', headers: { 'X-CSRFToken': csrfToken() } });
@@ -1313,6 +1415,7 @@ document.addEventListener('click', async event => {
       if (!row?.dataset.deviationPk) { legacyNotice('Выберите отклонение', true); return; }
       editingDeviationPk = row.dataset.deviationPk;
       field('order').value = row.dataset.order;
+      updateDeviationJobs(row.dataset.jobId);
       field('date').value = row.dataset.date;
       field('hours').value = row.dataset.hours;
       field('reason').value = row.dataset.reason;
@@ -1321,6 +1424,8 @@ document.addEventListener('click', async event => {
         field('reason').value = row.dataset.reason;
       }
       document.querySelector('[data-action="add-deviation"]').textContent = 'Сохранить';
+      field('hours').focus();
+      legacyNotice('Измените поля отклонения и нажмите «Сохранить»');
       return;
     }
     if (action === 'delete-deviation') {
@@ -1333,8 +1438,9 @@ document.addEventListener('click', async event => {
       } catch (error) { legacyNotice(error.message, true); }
       return;
     }
-    const payload = { order: field('order').value.trim(), date: field('date').value,
+    const payload = { order: field('order').value.trim(), job_id: field('work').value, date: field('date').value,
       hours: field('hours').value, reason: field('reason').value };
+    if (!payload.job_id) { legacyNotice('Выберите производственное задание', true); return; }
     try {
       const response = await fetch(editingDeviationPk ? `/api/legacy/deviations/${editingDeviationPk}/` : '/api/legacy/deviations/', {
         method: editingDeviationPk ? 'PUT' : 'POST', headers: apiHeaders(), body: JSON.stringify(payload)
@@ -1368,23 +1474,7 @@ document.addEventListener('click', async event => {
     event.stopPropagation(); event.preventDefault();
     const row = document.querySelector('.data-grid tbody tr.selected');
     if (!row?.dataset.itemPk) { legacyNotice('Выберите изделие', true); return; }
-    if (row.dataset.editing === 'true') {
-      try { await saveSelectedOrder(row); } catch (error) { legacyNotice(error.message, true); }
-    } else {
-      [0, 2, 3, 4, 8, 10, 11, 14].forEach(index => { if (row.cells[index]) row.cells[index].contentEditable = 'true'; });
-      for (const index of [12, 13, 21]) {
-        const cell = row.cells[index];
-        const date = isoDate(cell.textContent);
-        cell.replaceChildren();
-        const input = document.createElement('input');
-        input.type = 'date'; input.value = date;
-        input.setAttribute('aria-label', index === 12 ? 'Дата заявки' : index === 13 ? 'Дата ввода' : 'Дата изготовления');
-        cell.append(input);
-      }
-      row.dataset.editing = 'true';
-      event.target.closest('[data-action="edit-order"]').textContent = 'Сохранить';
-      row.cells[0]?.focus();
-    }
+    openOrderEditor(row);
     return;
   }
   if (action === 'delete-order' && ['orders', 'products'].includes(document.body.dataset.page)) {

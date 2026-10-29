@@ -12,6 +12,7 @@ from pathlib import Path
 import psycopg
 from django.conf import settings
 from django.db import connection
+from tools.pg_tools import postgres_bin
 
 
 DB_KEYS = {"host": "PGHOST", "port": "PGPORT", "database": "PGDATABASE",
@@ -19,18 +20,6 @@ DB_KEYS = {"host": "PGHOST", "port": "PGPORT", "database": "PGDATABASE",
 RUNTIME_DIR = settings.BASE_DIR / ".runtime"
 BACKUP_DIR = settings.BASE_DIR / ".backups"
 MAX_RESTORE_BYTES = 50 * 1024 * 1024  # Совпадает с client_max_body_size 50m в Nginx.
-
-
-def postgres_bin(name):
-    configured = os.getenv("PG_BIN_DIR")
-    candidates = ([Path(configured) / name] if configured else []) + [
-        Path(r"C:\OSPanel\modules\database\PostgreSQL-14-Win10\bin") / name,
-        Path(name),
-    ]
-    for candidate in candidates:
-        if candidate.is_file():
-            return str(candidate)
-    return name
 
 
 def active_config():
@@ -117,7 +106,12 @@ def dump_database(destination, config=None):
     result = subprocess.run(args, env=env, capture_output=True, text=True, timeout=300)
     if result.returncode:
         Path(destination).unlink(missing_ok=True)
-        raise RuntimeError(result.stderr.strip()[:500] or "Не удалось создать резервную копию")
+        error = result.stderr.strip()[:500]
+        match = re.search(r"(?:server version|версия сервера):\s*(\d+)", error, re.IGNORECASE)
+        if match:
+            error += (f" Установите на сервере приложения клиент PostgreSQL {match.group(1)} "
+                      f"(пакет postgresql-client-{match.group(1)}) или более новую совместимую версию.")
+        raise RuntimeError(error or "Не удалось создать резервную копию")
     if not Path(destination).is_file() or Path(destination).stat().st_size < 5:
         raise RuntimeError("Резервная копия не создана")
 
