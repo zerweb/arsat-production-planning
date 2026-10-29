@@ -973,7 +973,7 @@ def page(request, name="index"):
 def render_login(request, form):
     """Keep the tpp login markup and add only Django authentication fields."""
     markup = render_to_string("production/legacy/login.html", request=request)
-    markup = markup.replace('href="css/style.css"', 'href="/static/production/legacy/css/style.css"')
+    markup = markup.replace('href="css/style.css"', f'href="/static/production/legacy/css/style.css?v={legacy_assets_version()}"')
     markup = markup.replace('</head>', '<link rel="icon" type="image/svg+xml" href="/static/production/legacy/assets/favicon.svg"></head>', 1)
     markup = markup.replace('src="assets/', 'src="/static/production/legacy/assets/')
     markup = markup.replace('<form id="login-form" class="login-form" novalidate>',
