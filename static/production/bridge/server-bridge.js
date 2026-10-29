@@ -224,6 +224,21 @@ function legacyNotice(message, error = false) {
   setTimeout(() => node.remove(), 4000);
 }
 
+function installSidebarStatus() {
+  const sidebar = document.querySelector('.sidebar-product'); if (!sidebar) return;
+  const dot = document.createElement('span'); dot.className = 'sidebar-health-dot'; dot.setAttribute('role', 'status');
+  dot.setAttribute('aria-label', 'Проверка системы'); sidebar.prepend(dot);
+  const refresh = async () => {
+    try {
+      const response = await fetch('/health/ready/', {cache: 'no-store'});
+      dot.classList.toggle('online', response.ok); dot.classList.toggle('offline', !response.ok);
+      dot.title = response.ok ? 'Система работает' : 'Система или база данных недоступна';
+    } catch (_) { dot.classList.remove('online'); dot.classList.add('offline'); dot.title = 'Система недоступна'; }
+    dot.setAttribute('aria-label', dot.title);
+  };
+  refresh(); setInterval(refresh, 30000);
+}
+
 function legacyDate(value) {
   if (!value) return '';
   const parts = value.split('-');
@@ -901,6 +916,7 @@ function renderPlans(items) {
   }
 }
 
+let planPeriodInitialized = false;
 async function loadPlans() {
   const selection = planSelection();
   if (!selection) return;
@@ -908,7 +924,36 @@ async function loadPlans() {
   const response = await fetch(`/api/legacy/plans/?${params}`);
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || 'Не удалось загрузить план');
+  if (!planPeriodInitialized) {
+    planPeriodInitialized = true;
+    const controls = document.querySelector('.planning-controls');
+    const yearSelect = controls?.querySelector('select');
+    const quarterSelect = document.body.dataset.page === 'plan-a' ? controls?.querySelectorAll('select')[1] : null;
+    const periods = data.available_periods || [];
+    if (yearSelect) {
+      const years = new Set([...yearSelect.options].map(option => option.value));
+      periods.forEach(period => years.add(String(period.year)));
+      const previous = yearSelect.value;
+      yearSelect.replaceChildren(...[...years].sort().map(year => new Option(year, year)));
+      yearSelect.value = previous;
+      if (!data.items.length && periods.length) {
+        const period = periods[periods.length - 1]; yearSelect.value = String(period.year);
+        if (quarterSelect) quarterSelect.selectedIndex = period.quarter - 1;
+        if (Number(previous) !== period.year || (quarterSelect && selection.quarter !== period.quarter)) {
+          legacyNotice(`Показан доступный период: ${period.year}${quarterSelect ? `, квартал ${period.quarter}` : ''}`);
+          return loadPlans();
+        }
+      }
+    }
+  }
   renderPlans(data.items);
+  if (document.body.dataset.page === 'plan-a') {
+    const groups = document.querySelectorAll('.planning-controls fieldset');
+    const total = data.items.reduce((sum, item) => sum + (Number(item.hours) || 0), 0);
+    const periodHours = groups[0]?.querySelector('input'); if (periodHours) { periodHours.value = total.toFixed(2); periodHours.readOnly = true; }
+    const values = [data.items.reduce((sum, item) => sum + (Number(item.drawing_count) || 0), 0), total.toFixed(2), data.technologists ?? 0, '—', '—'];
+    groups[1]?.querySelectorAll('input').forEach((input, index) => { input.value = values[index]; input.readOnly = true; });
+  }
   let status = document.querySelector('#plan-approval-status');
   if (!status) { status = document.createElement('p'); status.id = 'plan-approval-status'; status.setAttribute('role', 'status'); document.querySelector('.planning-controls')?.after(status); }
   if (data.program?.approved_by) {
@@ -944,7 +989,7 @@ function reportQuery(kind) {
 
 let processCatalog = null;
 
-async function loadProcessesFromServer() {
+async function loadProcessesFromServer(selectedPk = null) {
   if (document.body.dataset.page !== 'processes') return;
   const response = await fetch('/api/legacy/processes/');
   if (!response.ok) throw new Error('Не удалось загрузить технологические процессы');
@@ -954,7 +999,7 @@ async function loadProcessesFromServer() {
   body.replaceChildren();
   data.processes.forEach((item, index) => {
     const row = body.insertRow();
-    if (index === 0) row.classList.add('selected');
+    if (selectedPk ? String(item.id) === String(selectedPk) : index === 0) row.classList.add('selected');
     row.dataset.routePk = item.id;
     [item.code, item.product, item.kind, item.version, item.status, item.date].forEach((value, cellIndex) => {
       const cell = row.insertCell();
@@ -982,7 +1027,7 @@ function openProcessEditor(item = null) {
         <label class="form-modal-field required"><span>Вид работ</span><select name="kind" required></select></label>
         <label class="form-modal-field"><span>Тпз на партию, ч</span><input name="setup_hours" type="number" min="0" step="0.01" value="0"></label>
         <label class="form-modal-field"><span>Штучное время, ч</span><input name="piece_hours" type="number" min="0" step="0.001" value="0"></label>
-        <label class="form-modal-field"><span>Контроль обязателен</span><input name="quality_required" type="checkbox"></label>
+        <label class="checkbox-field"><input name="quality_required" type="checkbox"><span>Контроль обязателен</span></label>
       </div>
       <details class="estd-fields"><summary>Поля маршрутной карты ЕСТД · ГОСТ 3.1118-82</summary>
         <div class="form-modal-grid">
@@ -1019,7 +1064,7 @@ function openProcessEditor(item = null) {
         });
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || 'Не удалось сохранить технологическую операцию');
-        dialog.close(); await loadProcessesFromServer(); legacyNotice('Технологическая операция сохранена в PostgreSQL');
+        dialog.close(); await loadProcessesFromServer(result.id); legacyNotice('Операция сохранена. Для применения норм утвердите её.');
       } catch (error) { legacyNotice(error.message, true); }
     });
   }
@@ -1738,7 +1783,8 @@ document.addEventListener('click', async event => {
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || 'Не удалось изменить процесс');
-      await loadProcessesFromServer(); legacyNotice('Изменения сохранены в PostgreSQL');
+      await loadProcessesFromServer(action === 'approve-process' ? pk : null);
+      legacyNotice(action === 'approve-process' ? 'Технологическая операция утверждена' : 'Операция удалена');
     } catch (error) { legacyNotice(error.message, true); }
     return;
   }
@@ -1848,6 +1894,7 @@ installOrderFilters();
 installProductEstdActions();
 hideDeferredIntegrations();
 installDatabaseAdmin();
+installSidebarStatus();
 installProfile();
 installMaintenance();
 if (['orders', 'products'].includes(document.body.dataset.page) && ['admin', 'technologist', 'manager'].includes(currentRole)) {

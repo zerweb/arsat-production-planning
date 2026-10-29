@@ -672,6 +672,8 @@ class WorkflowTests(TestCase):
             "quality_required": False,
         }), content_type="application/json")
         self.assertEqual(route_update.status_code, 200, route_update.content)
+        self.assertEqual(line.planned_hours, Decimal("0"))
+        self.assertEqual(self.client.put(f"/api/legacy/processes/{route_pk}/").status_code, 200)
         self.assertEqual(line.planned_hours, Decimal("2.500"))
         norm_row = next(row for row in self.client.get("/api/legacy/orders/").json()["orders"]
             if row["number"] == order.number)
@@ -985,6 +987,8 @@ class WorkflowTests(TestCase):
         self.assertEqual(approved.status_code, 200)
         route.refresh_from_db()
         self.assertTrue(route.approved)
+        listing = self.client.get("/api/legacy/processes/").json()
+        self.assertTrue(next(item for item in listing["processes"] if item["id"] == route.pk)["approved"])
         protected = self.client.delete(f"/api/legacy/processes/{route.pk}/")
         self.assertEqual(protected.status_code, 409)
 
@@ -1008,6 +1012,35 @@ class WorkflowTests(TestCase):
         self.assertEqual(m.RouteOperation.objects.get(pk=pk).piece_hours, Decimal("0.750"))
         self.assertEqual(m.RouteOperation.objects.get(pk=pk).shop_code, "01")
         self.assertEqual(m.RouteOperation.objects.get(pk=pk).tooling, "Калибр; микрометр")
+        self.client.put(f"/api/legacy/processes/{pk}/")
+        self.assertTrue(m.RouteOperation.objects.get(pk=pk).approved)
+        payload["quality_required"] = False
+        updated = self.client.put(f"/api/legacy/processes/{pk}/", data=json.dumps(payload), content_type="application/json")
+        self.assertEqual(updated.status_code, 200, updated.content)
+        route = m.RouteOperation.objects.get(pk=pk)
+        self.assertFalse(route.approved)
+        self.assertFalse(route.quality_required)
+
+    def test_plan_returns_available_periods_and_real_drawing_counts(self):
+        order = m.Order.objects.filter(archived=False, items__isnull=False).first()
+        quarter = (order.due_date.month - 1) // 3 + 1
+        response = self.client.get(f"/api/legacy/plans/?kind=a&year={order.due_date.year}&quarter={quarter}")
+        self.assertEqual(response.status_code, 200, response.content)
+        data = response.json()
+        self.assertIn({"year": order.due_date.year, "quarter": quarter}, data["available_periods"])
+        self.assertTrue(any(item["number"] == order.number and item["drawing_count"] > 0 for item in data["items"]))
+
+    def test_repair_sample_names_changes_only_known_corruption(self):
+        first = User.objects.get(username="normalizer_01")
+        second = User.objects.get(username="normalizer_02")
+        first.first_name = "??????? ?? ????????????"; first.save(update_fields=["first_name"])
+        second.first_name = "Мария"; second.save(update_fields=["first_name"])
+        call_command("repair_sample_names", verbosity=0)
+        first.refresh_from_db(); second.refresh_from_db()
+        self.assertEqual(first.first_name, "Инженер по нормированию труда")
+        self.assertEqual(second.first_name, "Мария")
+        call_command("repair_sample_names", verbosity=0)
+        self.assertEqual(m.AuditLog.objects.filter(model_name="User", object_id=first.pk, reason__contains="подпись").count(), 1)
 
     def test_deviation_create_edit_delete_in_postgresql(self):
         payload = {"order": "З-2026-041", "date": "2026-10-14", "hours": "2.5", "reason": "Отсутствие инструмента/оснастки"}

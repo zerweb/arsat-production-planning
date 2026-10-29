@@ -254,6 +254,8 @@ def display_user_name(user):
     # В старой тестовой фикстуре текст был утрачен и заменён вопросительными знаками.
     if user.first_name == "???????-????????" and user.username.startswith("technologist_"):
         return f"Инженер-технолог {user.username.removeprefix('technologist_')}"
+    if user.first_name == "??????? ?? ????????????" and user.username in ("normalizer_01", "normalizer_02"):
+        return f"Инженер по нормированию труда {user.username[-2:]}"
     return user.get_full_name() or user.username
 
 
@@ -483,12 +485,17 @@ def plans_api(request):
                     categories[category] += max(route.batch_hours(item.quantity) - actual, Decimal("0"))
                 rows.append({"id": item.pk, "number": item.order.number, "customer": item.order.customer.name,
                     "product": item.product.name, "drawing": item.product.drawing, "quantity": item.quantity,
+                    "drawing_count": item.drawing_count,
                     "priority": item.order.priority, "request": item.order.request_number,
                     "start_date": item.order.start_date.isoformat(), "due_date": item.order.due_date.isoformat(),
                     "progress": item.order.progress, "hours": str(hours),
                     "remaining_by_category": [str(value) for value in categories], "planned": item.pk in planned})
             audit = AuditLog.objects.filter(model_name="Program", object_id=program.pk, action="approve").select_related("user").first() if program else None
-            return JsonResponse({"items": rows, "program": {"id": program.pk, "status": program.status,
+            dates = OrderItem.objects.filter(order__archived=False).dates("order__due_date", "month")
+            periods = sorted({(day.year, (day.month - 1) // 3 + 1) for day in dates})
+            return JsonResponse({"items": rows, "available_periods": [{"year": year, "quarter": quarter} for year, quarter in periods],
+                "technologists": User.objects.filter(is_active=True, groups__name="technologist").distinct().count(),
+                "program": {"id": program.pk, "status": program.status,
                 "approved_by": display_user_name(audit.user) if audit and audit.user else None,
                 "approved_at": audit.created_at.isoformat() if audit else None} if program else None})
         if not items:
@@ -848,7 +855,7 @@ def save_process_api(request, route=None):
                 setattr(route, field, str(data.get(field, getattr(route, field, ""))).strip())
             route.worker_count = int(data.get("worker_count", route.worker_count))
             route.simultaneous_quantity = int(data.get("simultaneous_quantity", route.simultaneous_quantity))
-            if role(request.user) not in ("admin", "manager") and not request.user.is_superuser:
+            if not creating:
                 route.approved = False
             route.full_clean()
             route.save()

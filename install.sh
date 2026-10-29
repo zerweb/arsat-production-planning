@@ -451,6 +451,7 @@ prepare_python() {
 
 apply_database() {
     "$PYTHON" manage.py migrate --noinput
+    "$PYTHON" manage.py repair_sample_names
     local sample_state
     sample_state="$("$PYTHON" manage.py sample_data_state)"
     if [[ "$IMPORT_SAMPLE" == y || "$IMPORT_SAMPLE" == Y ]]; then
@@ -840,6 +841,7 @@ update_project() {
     ln -s "$UPDATE_VENV_DIR" "$PROJECT_ROOT/.venv"
     UPDATE_MIGRATIONS_STARTED=1
     "$PYTHON" manage.py migrate --noinput
+    "$PYTHON" manage.py repair_sample_names
     "$PYTHON" manage.py check --database default
     "$PYTHON" manage.py collectstatic --noinput --verbosity 0
     systemctl start "$SERVICE_NAME"

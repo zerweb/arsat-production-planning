@@ -59,7 +59,7 @@ loginForm.addEventListener('submit', (event) => {
   window.setTimeout(() => window.location.replace('index.html'), 250);
 });
 
-document.querySelector('#close-login').addEventListener('click', () => {
+document.querySelector('#close-login')?.addEventListener('click', () => {
   usernameInput.value = '';
   passwordInput.value = '';
   message.className = 'login-message';

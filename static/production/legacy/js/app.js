@@ -142,7 +142,7 @@ const pageViews = {
         <label class="form-modal-field required"><span>ФИО сотрудника</span><input name="fullName" required></label>
         <label class="form-modal-field required"><span>Пароль</span><input name="password" type="password" required></label>
         <label class="form-modal-field required"><span>Роль</span><select name="role" required><option value="technologist">Инженер-технолог</option><option value="normalizer">Инженер по нормированию труда</option><option value="manager">Начальник отдела</option><option value="planner">Планировщик</option><option value="supervisor">Начальник участка</option><option value="economist">Экономист</option><option value="admin">Администратор системы</option></select></label>
-        <label class="form-modal-field"><span><input name="isActive" type="checkbox" checked> Учётная запись активна</span></label>
+        <label class="checkbox-field"><input name="isActive" type="checkbox" checked><span>Учётная запись активна</span></label>
       </div>
       <footer><button type="button" class="ghost-button" data-dialog-close="user-dialog">Отмена</button><button class="primary-button" type="submit">Сохранить</button></footer>
     </form>
@@ -1134,8 +1134,8 @@ const pageViews = {
     <div class="page">
 
     <div class="toolbar">
-      <button class="tool-button" data-action="export-current">💾 Сохранить в Excel...</button>
-      <button class="tool-button" data-go="settings.html">🔑 Настройка...</button>
+      <button class="tool-button" data-action="export-current"><img class="tool-icon" src="/static/production/legacy/assets/fa-floppy-disk.svg" alt=""> Сохранить в Excel...</button>
+      <button class="tool-button" data-go="settings.html"><img class="tool-icon" src="/static/production/legacy/assets/fa-gear.svg" alt=""> Настройка...</button>
       <button class="tool-button" data-go="index.html">⬅ Перейти назад</button>
     </div>
 
@@ -1514,7 +1514,7 @@ const pageViews = {
     </section>
 
       <section class="content-card recent-processes">
-        <div class="card-heading"><div><span class="eyebrow">Последние изменения</span><h3>Технологические процессы</h3></div><div class="row-actions"><button class="ghost-button" data-action="approve-process">Утвердить и подписать</button><button class="ghost-button" data-action="edit-process">Изменить</button><button class="ghost-button danger" data-action="delete-process">Удалить</button></div></div>
+        <div class="card-heading"><div><span class="eyebrow">Последние изменения</span><h3>Технологические процессы</h3></div><div class="row-actions"><button class="ghost-button" data-action="approve-process">Утвердить</button><button class="ghost-button" data-action="edit-process">Изменить</button><button class="ghost-button danger" data-action="delete-process">Удалить</button></div></div>
         <div class="modern-table-wrap">
           <table class="modern-table">
             <thead><tr><th>Код ТП</th><th>Изделие</th><th>Вид работ</th><th>Версия</th><th>Состояние</th><th>Дата изменения</th></tr></thead>
@@ -1615,8 +1615,8 @@ const pageViews = {
     <div class="page">
 
     <div class="toolbar">
-      <button class="tool-button" data-action="export-current">💾 Сохранить в Excel...</button>
-      <button class="tool-button" data-go="settings.html">🔑 Настройка...</button>
+      <button class="tool-button" data-action="export-current"><img class="tool-icon" src="/static/production/legacy/assets/fa-floppy-disk.svg" alt=""> Сохранить в Excel...</button>
+      <button class="tool-button" data-go="settings.html"><img class="tool-icon" src="/static/production/legacy/assets/fa-gear.svg" alt=""> Настройка...</button>
       <button class="tool-button" data-go="index.html">⬅ Перейти назад</button>
     </div>
       <div class="split-view">
@@ -1773,8 +1773,8 @@ const pageViews = {
     <div class="page">
 
     <div class="toolbar">
-      <button class="tool-button" data-action="export-current">💾 Сохранить в Excel...</button>
-      <button class="tool-button" data-go="settings.html">🔑 Настройка...</button>
+      <button class="tool-button" data-action="export-current"><img class="tool-icon" src="/static/production/legacy/assets/fa-floppy-disk.svg" alt=""> Сохранить в Excel...</button>
+      <button class="tool-button" data-go="settings.html"><img class="tool-icon" src="/static/production/legacy/assets/fa-gear.svg" alt=""> Настройка...</button>
       <button class="tool-button" data-go="index.html">⬅ Перейти назад</button>
     </div>
 
@@ -2086,8 +2086,8 @@ const pageViews = {
     <div class="page">
 
     <div class="toolbar">
-      <button class="tool-button" data-action="export-current">💾 Сохранить в Excel...</button>
-      <button class="tool-button" data-go="settings.html">🔑 Настройка...</button>
+      <button class="tool-button" data-action="export-current"><img class="tool-icon" src="/static/production/legacy/assets/fa-floppy-disk.svg" alt=""> Сохранить в Excel...</button>
+      <button class="tool-button" data-go="settings.html"><img class="tool-icon" src="/static/production/legacy/assets/fa-gear.svg" alt=""> Настройка...</button>
       <button class="tool-button" data-go="index.html">⬅ Перейти назад</button>
     </div>
 
@@ -2141,7 +2141,7 @@ const pageViews = {
     </div>
     <div class="modal-layer">
         <section class="dialog settings-dialog">
-          <header class="dialog-title">🔑 Настройки</header>
+          <header class="dialog-title"><img class="tool-icon" src="/static/production/legacy/assets/fa-gear.svg" alt=""> Настройки</header>
           <div class="settings-layout">
             <nav class="settings-nav">
 
@@ -2360,8 +2360,8 @@ const pageViews = {
     <div class="page">
 
     <div class="toolbar">
-      <button class="tool-button" data-action="export-current">💾 Сохранить в Excel...</button>
-      <button class="tool-button" data-go="settings.html">🔑 Настройка...</button>
+      <button class="tool-button" data-action="export-current"><img class="tool-icon" src="/static/production/legacy/assets/fa-floppy-disk.svg" alt=""> Сохранить в Excel...</button>
+      <button class="tool-button" data-go="settings.html"><img class="tool-icon" src="/static/production/legacy/assets/fa-gear.svg" alt=""> Настройка...</button>
       <button class="tool-button" data-go="index.html">⬅ Перейти назад</button>
     </div>
       <div class="filters standards-filters">

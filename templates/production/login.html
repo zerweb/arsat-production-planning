@@ -7,7 +7,7 @@
       <label for="server">Сервер</label><input id="server" value="{{ request.get_host }}" readonly>
       <label for="username">Логин</label><input id="username" name="username" autocomplete="username" placeholder="Введите логин" required>
       <label for="password">Пароль</label><input id="password" name="password" type="password" autocomplete="current-password" placeholder="Введите пароль" required>
-      <div class="login-actions"><button type="submit" class="btn">Войти</button><button type="reset" id="close-login" class="btn">Очистить</button></div>
+      <div class="login-actions"><button type="submit" class="btn">Войти</button></div>
       <p id="login-message" class="login-message" aria-live="polite">{% if form.non_field_errors %}{{ form.non_field_errors|striptags }}{% else %}Введите логин и пароль{% endif %}</p>
     </form>
   </main>
