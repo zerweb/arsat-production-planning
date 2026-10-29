@@ -230,6 +230,136 @@ function legacyDate(value) {
   return parts.length === 3 ? `${parts[2]}.${parts[1]}.${parts[0]}` : value;
 }
 
+// Редактирование справочников выполняется одной записью, без замены всей таблицы.
+function openModuleEditor(table, row) {
+  const key = table.dataset.moduleStore;
+  const original = row?.cells[0]?.textContent.trim() || '';
+  const dialog = document.createElement('dialog');
+  dialog.className = 'form-modal';
+  const form = document.createElement('form');
+  form.className = 'form-modal-body';
+  const title = document.createElement('h2');
+  title.textContent = row ? 'Изменить запись' : 'Добавить запись';
+  const grid = document.createElement('div'); grid.className = 'form-modal-grid';
+  const fields = [];
+  [...table.tHead.rows[0].cells].forEach((heading, index) => {
+    const label = document.createElement('label'); label.className = 'form-modal-field';
+    const caption = document.createElement('span'); caption.textContent = heading.textContent.trim();
+    const input = document.createElement('input'); input.value = row?.cells[index]?.textContent.trim() || '';
+    if (key === 'personnel' && index === 6) { input.type = 'date'; input.value = isoDate(input.value); }
+    if (key === 'timesheet' && (index >= 9 || (index >= 1 && index <= 3))) {
+      input.readOnly = true; input.title = 'Значение рассчитывается или берётся из справочника персонала';
+    }
+    label.append(caption, input); grid.append(label); fields.push(input);
+  });
+  const error = document.createElement('p'); error.setAttribute('role', 'alert'); error.className = 'editor-error';
+  const footer = document.createElement('footer');
+  const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'ghost-button'; cancel.textContent = 'Отмена';
+  const save = document.createElement('button'); save.className = 'primary-button'; save.textContent = 'Сохранить';
+  footer.append(cancel, save); form.append(title, grid, error, footer); dialog.append(form); document.body.append(dialog);
+  cancel.addEventListener('click', () => dialog.close());
+  dialog.addEventListener('close', () => dialog.remove());
+  form.addEventListener('submit', async event => {
+    event.preventDefault(); save.disabled = true; error.textContent = '';
+    const values = fields.map(input => input.value.trim());
+    if (key === 'personnel' && values[6]) values[6] = legacyDate(values[6]);
+    try {
+      const response = await fetch(`/api/legacy/table/${encodeURIComponent(key)}/row/`, {
+        method: 'POST', headers: apiHeaders(), body: JSON.stringify({ row: values, original,
+          month: document.querySelector('.module-filters input[type="month"]')?.value || '' })
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Не удалось сохранить запись');
+      const suffix = key === 'timesheet' ? `?month=${encodeURIComponent(document.querySelector('.module-filters input[type="month"]')?.value || '')}`
+        : key === 'operations' ? '?include_inactive=1' : '';
+      const updated = await fetch(`/api/legacy/table/${encodeURIComponent(key)}/${suffix}`);
+      if (!updated.ok) throw new Error('Запись сохранена, но таблицу не удалось обновить');
+      renderModuleTable(table, (await updated.json()).rows); applyModuleFilters();
+      dialog.close(); legacyNotice('Запись сохранена');
+    } catch (exc) { error.textContent = exc.message; } finally { save.disabled = false; }
+  });
+  dialog.showModal();
+}
+
+document.addEventListener('click', event => {
+  const planButton = event.target.closest('[data-settings-plan-action="edit"], [data-settings-plan-action="add"]');
+  if (planButton) {
+    event.preventDefault(); event.stopImmediatePropagation();
+    const table = planButton.closest('.settings-quarter-table').querySelector('table');
+    const selected = table.tBodies[0].querySelector('tr.selected');
+    if (planButton.dataset.settingsPlanAction === 'edit' && !selected) { legacyNotice('Выберите период', true); return; }
+    const row = planButton.dataset.settingsPlanAction === 'edit' ? selected : null;
+    const dialog = document.createElement('dialog'); dialog.className = 'form-modal';
+    const form = document.createElement('form'); form.className = 'form-modal-body';
+    const title = document.createElement('h2'); title.textContent = row ? 'Изменить период' : 'Добавить период';
+    const grid = document.createElement('div'); grid.className = 'form-modal-grid';
+    const inputs = [...table.tHead.rows[0].cells].map((cell, index) => {
+      const label = document.createElement('label'); label.className = 'form-modal-field';
+      const caption = document.createElement('span'); caption.textContent = cell.textContent.trim();
+      const input = document.createElement('input'); input.type = 'number'; input.min = index ? '0' : '2000'; input.max = index ? '100000' : '2100'; input.step = '1'; input.required = true;
+      input.value = row?.cells[index]?.textContent.trim() || (index ? '0' : String(new Date().getFullYear()));
+      label.append(caption, input); grid.append(label); return input;
+    });
+    const error = document.createElement('p'); error.setAttribute('role', 'alert'); error.className = 'editor-error';
+    const footer = document.createElement('footer');
+    const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'ghost-button'; cancel.textContent = 'Отмена';
+    const save = document.createElement('button'); save.className = 'primary-button'; save.textContent = 'Сохранить';
+    footer.append(cancel, save); form.append(title, grid, error, footer); dialog.append(form); document.body.append(dialog);
+    cancel.addEventListener('click', () => dialog.close()); dialog.addEventListener('close', () => dialog.remove());
+    form.addEventListener('submit', async e => { e.preventDefault();
+      const values = inputs.map(input => input.value.trim());
+      const rows = [...table.tBodies[0].rows].map(existing => existing === row ? values : [...existing.cells].map(cell => cell.textContent.trim()));
+      if (!row) rows.push(values);
+      if (rows.filter(values2 => values2[0] === values[0]).length > 1) { error.textContent = 'Этот год уже существует'; return; }
+      try {
+        const response = await fetch('/api/legacy/table/settings-periods/', { method: 'PUT', headers: apiHeaders(), body: JSON.stringify({rows}) });
+        const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Не удалось сохранить период');
+        renderPlanPeriods(table, rows); dialog.close(); legacyNotice('Период сохранён');
+      } catch (exc) { error.textContent = exc.message; }
+    });
+    dialog.showModal(); return;
+  }
+  const button = event.target.closest('[data-module-action="edit"], [data-module-action="add"]');
+  if (!button) return;
+  const table = button.closest('.module-table-card')?.querySelector('[data-module-store]');
+  if (!table || !['personnel', 'operations', 'timesheet'].includes(table.dataset.moduleStore)) return;
+  event.preventDefault(); event.stopImmediatePropagation();
+  const row = table.tBodies[0].querySelector('tr.selected');
+  if (button.dataset.moduleAction === 'edit' && !row) { legacyNotice('Выберите запись', true); return; }
+  openModuleEditor(table, button.dataset.moduleAction === 'edit' ? row : null);
+}, true);
+
+function openDeviationEditor(row) {
+  const dialog = document.createElement('dialog'); dialog.className = 'form-modal';
+  dialog.innerHTML = `<form class="form-modal-body"><h2>Изменить отклонение</h2><div class="form-modal-grid">
+    <label class="form-modal-field"><span>Заказ</span><select name="order" required></select></label>
+    <label class="form-modal-field"><span>Производственное задание</span><select name="job_id" required></select></label>
+    <label class="form-modal-field"><span>Дата</span><input name="date" type="date" required></label>
+    <label class="form-modal-field"><span>Часы</span><input name="hours" type="number" min="0.01" step="0.01" required></label>
+    <label class="form-modal-field"><span>Причина</span><input name="reason" maxlength="200" required></label>
+    </div><p role="alert" class="editor-error"></p><footer><button type="button" class="ghost-button">Отмена</button><button class="primary-button">Сохранить</button></footer></form>`;
+  document.body.append(dialog); const form = dialog.querySelector('form');
+  [...new Set(deviationJobs.map(job => job.order))].forEach(value => form.elements.order.add(new Option(value, value)));
+  form.elements.order.value = row.dataset.order;
+  const fillJobs = () => { form.elements.job_id.replaceChildren(); deviationJobs.filter(job => job.order === form.elements.order.value)
+    .forEach(job => form.elements.job_id.add(new Option(job.label, job.id))); };
+  fillJobs(); form.elements.job_id.value = row.dataset.jobId;
+  form.elements.order.addEventListener('change', fillJobs);
+  ['date', 'hours', 'reason'].forEach(name => { form.elements[name].value = row.dataset[name]; });
+  dialog.querySelector('button[type="button"]').addEventListener('click', () => dialog.close());
+  dialog.addEventListener('close', () => dialog.remove());
+  form.addEventListener('submit', async event => {
+    event.preventDefault(); const save = form.querySelector('button[type="submit"], button:not([type])'); save.disabled = true;
+    try {
+      const response = await fetch(`/api/legacy/deviations/${row.dataset.deviationPk}/`, {
+        method: 'PUT', headers: apiHeaders(), body: JSON.stringify(Object.fromEntries(new FormData(form))) });
+      const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Не удалось сохранить');
+      await loadDeviationsFromServer(); dialog.close(); legacyNotice('Отклонение сохранено');
+    } catch (exc) { dialog.querySelector('[role="alert"]').textContent = exc.message; } finally { save.disabled = false; }
+  });
+  dialog.showModal();
+}
+
 function isoDate(value) {
   const match = String(value || '').trim().match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
   return match ? `${match[3]}-${match[2]}-${match[1]}` : value;
@@ -299,9 +429,39 @@ function initializeNorming() {
   fields.year.value = String(today.getFullYear());
   fields.quarter.value = String(Math.floor(today.getMonth() / 3) + 1);
   if (currentRole === 'economist') document.querySelector('[data-action="norming-approve"]').hidden = true;
+  if (currentRole !== 'economist') {
+    const approve = document.querySelector('[data-action="norming-approve"]');
+    const edit = document.createElement('button'); edit.type = 'button'; edit.className = 'btn'; edit.textContent = 'Изменить нормирование';
+    approve.before(edit); edit.addEventListener('click', openNormingEditor);
+  }
   for (const field of [fields.year, fields.quarter]) field.addEventListener('change', () =>
     loadNorming().catch(error => legacyNotice(error.message, true)));
   loadNorming().catch(error => legacyNotice(error.message, true));
+}
+
+function openNormingEditor() {
+  const fields = normingFields(); const dialog = document.createElement('dialog'); dialog.className = 'form-modal';
+  dialog.innerHTML = `<form class="form-modal-body"><h2>Изменить нормирование</h2><div class="form-modal-grid">
+    <label class="form-modal-field"><span>Часы на работника</span><input name="hours" type="number" min="0.01" max="10000" step="0.01" required></label>
+    <label class="form-modal-field"><span>Коэффициент</span><input name="factor" type="number" min="0.01" max="100" step="0.01" required></label>
+    <label class="form-modal-field"><span>Численность</span><input name="staff" type="number" min="1" max="10000" step="1" required></label>
+    </div><p>Период и количество чертежей определяются выбранным кварталом и заказами.</p><p role="alert" class="editor-error"></p>
+    <footer><button type="button" class="ghost-button">Отмена</button><button class="primary-button">Сохранить и утвердить</button></footer></form>`;
+  document.body.append(dialog); const form = dialog.querySelector('form');
+  ['hours', 'factor', 'staff'].forEach(key => { form.elements[key].value = fields[key].value; });
+  dialog.querySelector('button[type="button"]').addEventListener('click', () => dialog.close());
+  dialog.addEventListener('close', () => dialog.remove());
+  form.addEventListener('submit', async event => { event.preventDefault();
+    try {
+      const payload = { year: fields.year.value, quarter: fields.quarter.value, hours_per_employee: form.elements.hours.value,
+        labor_factor: form.elements.factor.value, staff_count: form.elements.staff.value };
+      const response = await fetch('/api/legacy/norming/', { method: 'POST', headers: apiHeaders(), body: JSON.stringify(payload) });
+      const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Не удалось сохранить нормирование');
+      ['hours', 'factor', 'staff'].forEach(key => { fields[key].value = form.elements[key].value; });
+      showNormingResult(data); dialog.close(); legacyNotice('Нормирование сохранено');
+    } catch (error) { dialog.querySelector('[role="alert"]').textContent = error.message; }
+  });
+  dialog.showModal();
 }
 
 function installOrderFilters() {
@@ -450,7 +610,6 @@ async function loadDatabaseStatus() {
     const form = document.querySelector('#server-form');
     if (form) for (const name of ['host', 'port', 'database', 'username']) form.elements[name].value = data[name] || '';
     if (badge) { badge.textContent = 'Подключено'; badge.classList.add('success'); }
-    legacyNotice('Подключение к PostgreSQL проверено');
   } catch (error) {
     if (badge) badge.textContent = 'Нет подключения';
     legacyNotice(error.message, true);
@@ -487,7 +646,7 @@ function installDatabaseAdmin() {
     document.body.insertAdjacentHTML('beforeend', `<dialog id="database-backup-dialog" class="backup-dialog" aria-labelledby="backup-dialog-title">
       <section class="content-card backup-admin-card">
         <div class="card-heading"><div><span class="eyebrow">Резервное копирование</span><h3 id="backup-dialog-title">Экспорт и импорт базы данных</h3></div>
-          <button type="button" class="ghost-button" data-action="backup-close" aria-label="Закрыть окно">Закрыть</button></div>
+          <button type="button" class="ghost-button danger" data-action="backup-close" aria-label="Закрыть окно">Закрыть</button></div>
         <div class="row-actions backup-actions"><button type="button" class="ghost-button" data-action="backup-create">Создать SQL на сервере</button>
           <button type="button" class="ghost-button" data-action="backup-export">Скачать SQL</button>
           <button type="button" class="ghost-button" data-action="backup-export-archive">Скачать архив .dump</button></div>
@@ -546,11 +705,71 @@ async function loadServerUsers() {
   serverUsers = (await response.json()).users;
   window.loadUsers = () => serverUsers;
   renderUsers();
+  const counts = ['manager', 'technologist', 'normalizer', 'admin'];
+  document.querySelectorAll('.permissions-table tbody tr').forEach((row, index) => {
+    if (counts[index] && row.cells[1]) row.cells[1].textContent = serverUsers.filter(user => user.isActive && user.role === counts[index]).length;
+  });
   document.querySelectorAll('#admin-users-body tr').forEach(row => {
     const user = serverUsers.find(item => item.username === row.dataset.username);
     const pill = row.querySelector('.status-pill');
     if (pill && user && !user.isActive) { pill.textContent = 'Отключён'; pill.classList.remove('success'); }
     if (user?.id === Number(document.body.dataset.userId)) row.querySelector('[data-action="delete-user"]')?.setAttribute('disabled', '');
+  });
+}
+
+function installProfile() {
+  const panel = document.querySelector('.user-panel');
+  if (!panel) return;
+  const defaultAvatar = panel.querySelector('.user-avatar');
+  if (defaultAvatar) defaultAvatar.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"></circle><path d="M4 21a8 8 0 0 1 16 0"></path></svg>';
+  const button = document.createElement('button'); button.type = 'button'; button.className = 'ghost-button'; button.textContent = 'Профиль';
+  panel.insertBefore(button, panel.querySelector('#logout-button'));
+  const dialog = document.createElement('dialog'); dialog.className = 'form-modal';
+  dialog.innerHTML = `<form class="form-modal-body"><h2>Мой профиль</h2><div class="form-modal-grid">
+    <label class="form-modal-field"><span>Логин</span><input name="username" required maxlength="150"></label>
+    <label class="form-modal-field"><span>Электронная почта</span><input name="email" type="email" maxlength="254"></label>
+    <label class="form-modal-field"><span>Фотография (до 2 МБ)</span><input name="avatar" type="file" accept="image/png,image/jpeg,image/webp"></label>
+    <label class="form-modal-field"><span>Текущий пароль для изменения логина или пароля</span><input name="current_password" type="password" autocomplete="current-password"></label>
+    <label class="form-modal-field"><span>Новый пароль</span><input name="new_password" type="password" autocomplete="new-password"></label>
+    </div><p role="alert" class="editor-error"></p><footer><button type="button" class="ghost-button">Отмена</button><button class="primary-button">Сохранить</button></footer></form>`;
+  document.body.append(dialog); const form = dialog.querySelector('form');
+  const load = async () => {
+    const response = await fetch('/api/profile/'); if (!response.ok) throw new Error('Не удалось загрузить профиль');
+    const data = await response.json(); form.elements.username.value = data.username; form.elements.email.value = data.email;
+    form.elements.username.readOnly = !data.canChangeUsername; form.elements.new_password.disabled = !data.canChangePassword;
+    const avatar = panel.querySelector('.user-avatar');
+    if (avatar && data.hasAvatar) { avatar.textContent = ''; avatar.style.backgroundImage = `url('/api/profile/avatar/?v=${Date.now()}')`; avatar.classList.add('user-avatar-image'); }
+    return data;
+  };
+  load().catch(error => legacyNotice(error.message, true));
+  button.addEventListener('click', async () => { try { await load(); form.elements.current_password.value = ''; form.elements.new_password.value = ''; dialog.querySelector('[role="alert"]').textContent = ''; dialog.showModal(); } catch (error) { legacyNotice(error.message, true); } });
+  dialog.querySelector('button[type="button"]').addEventListener('click', () => dialog.close());
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    try {
+      const response = await fetch('/api/profile/', { method: 'POST', headers: { 'X-CSRFToken': csrfToken() }, body: new FormData(form) });
+      const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Не удалось сохранить профиль');
+      sessionStorage.setItem('oecUser', result.username); form.reset(); await load(); dialog.close(); legacyNotice('Профиль сохранён');
+    } catch (error) { dialog.querySelector('[role="alert"]').textContent = error.message; }
+  });
+}
+
+function installMaintenance() {
+  if (document.body.dataset.page !== 'admin') return;
+  const target = document.querySelector('.backup-launch'); if (!target) return;
+  const button = document.createElement('button'); button.className = 'ghost-button'; button.type = 'button'; target.append(' ', button);
+  let active = false;
+  const render = () => { button.textContent = active ? 'Выключить технический режим' : 'Включить технический режим'; };
+  fetch('/api/admin/policy/').then(r => { if (!r.ok) throw new Error('Не удалось получить состояние технического режима'); return r.json(); })
+    .then(data => { active = data.maintenance; render(); }).catch(error => legacyNotice(error.message, true));
+  render();
+  button.addEventListener('click', async () => {
+    if (!active && !confirm('Приостановить доступ остальных пользователей?')) return;
+    try {
+      const response = await fetch('/api/admin/policy/', { method: 'PUT', headers: apiHeaders(), body: JSON.stringify({maintenance: !active}) });
+      const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Не удалось изменить режим');
+      active = data.maintenance; render(); legacyNotice(active ? 'Технический режим включён' : 'Технический режим выключен');
+    } catch (error) { legacyNotice(error.message, true); }
   });
 }
 
@@ -1071,24 +1290,43 @@ async function saveLegacyOrder(exitAfter) {
   const get = name => document.querySelector(`[data-entry="${name}"]`)?.value?.trim() || '';
   const start = get('start-date');
   const due = get('due-date');
-  const items = [...document.querySelectorAll('.entry-products-table tbody tr')].map(row => ({
+  const productRows = [...document.querySelectorAll('.entry-products-table:not(.product-editor-table) tbody tr')];
+  const items = productRows.map(row => ({
     name: row.querySelector('[data-entry="product"]')?.value?.trim() || '',
     quantity: row.cells[1]?.querySelector('input')?.value || 0,
     drawing: row.querySelector('[data-entry="drawing"]')?.value?.trim() || '',
     drawing_count: row.cells[3]?.querySelector('input')?.value || 0,
     object_name: row.querySelector('[data-entry="product-object"]')?.value?.trim() || ''
-  })).filter(item => item.name);
+  })).filter((item, index) => [...productRows[index].querySelectorAll('input')].some(input => input.value.trim()));
   const payload = { number: get('order'), customer: get('object'), request_number: get('request'),
     start_date: start, due_date: due, registration_date: get('registration-date'),
     request_date: get('request-date'), priority: Number(get('priority') || 2), note: get('note'), cost_code: get('cost-code'),
     machine: get('machine'), cnc: get('cnc'), cnc_control: get('cnc-control'),
     cnc_program: get('cnc-program'), one_c_code: get('one-c-code'), items };
-  if (!payload.number || !payload.customer || !start || !due || !items.length) {
-    legacyNotice('Заполните номер заказа, объект, сроки и изделия', true); return;
+  let summary = document.querySelector('#order-validation-errors');
+  if (!summary) {
+    summary = document.createElement('div'); summary.id = 'order-validation-errors'; summary.className = 'editor-error';
+    summary.setAttribute('role', 'alert'); document.querySelector('.order-entry-main')?.before(summary);
   }
-  if (items.some(item => Number(item.quantity) < 1 || Number(item.drawing_count) < 1)) {
-    legacyNotice('Количество изделий и чертежей должно быть больше нуля', true); return;
-  }
+  document.querySelectorAll('.order-field-error').forEach(node => { node.classList.remove('order-field-error'); node.removeAttribute('aria-invalid'); });
+  const errors = [];
+  const invalid = (input, message) => { errors.push(message); if (input) { input.classList.add('order-field-error'); input.setAttribute('aria-invalid', 'true'); } };
+  [['order', 'Номер заказа'], ['object', 'Заказчик'], ['start-date', 'Плановый запуск'], ['due-date', 'Плановый выпуск']]
+    .forEach(([name, label]) => { const input = document.querySelector(`[data-entry="${name}"]`); if (!input?.value.trim()) invalid(input, `${label}: заполните поле`); });
+  if (start && due && due < start) invalid(document.querySelector('[data-entry="due-date"]'), 'Плановый выпуск: дата раньше запуска');
+  let filled = 0;
+  productRows.forEach((row, index) => {
+    const inputs = [...row.querySelectorAll('input')];
+    if (!inputs.some(input => input.value.trim())) return;
+    filled++;
+    const name = row.querySelector('[data-entry="product"]');
+    if (!name?.value.trim()) invalid(name, `Изделие ${index + 1}: укажите наименование`);
+    [1, 3].forEach(column => { const input = row.cells[column]?.querySelector('input');
+      if (!input || !Number.isInteger(Number(input.value)) || Number(input.value) < 1) invalid(input, `Изделие ${index + 1}: ${column === 1 ? 'количество' : 'количество чертежей'} должно быть целым числом больше нуля`); });
+  });
+  if (!filled) invalid(productRows[0]?.querySelector('[data-entry="product"]'), 'Добавьте хотя бы одно изделие');
+  if (errors.length) { summary.replaceChildren(...errors.map(message => { const line = document.createElement('div'); line.textContent = message; return line; })); summary.scrollIntoView({block: 'center'}); return; }
+  summary.replaceChildren();
   try {
     const response = await fetch('/api/legacy/orders/', { method: 'POST', headers: apiHeaders(), body: JSON.stringify(payload) });
     const result = await response.json();
@@ -1096,7 +1334,7 @@ async function saveLegacyOrder(exitAfter) {
     legacyNotice(`Заказ ${result.number} сохранен в PostgreSQL`);
     if (exitAfter) window.location.href = 'orders.html?view=portfolio';
     else resetEntryForm();
-  } catch (error) { legacyNotice(error.message, true); }
+  } catch (error) { summary.textContent = `Не удалось сохранить заказ: ${error.message}`; summary.scrollIntoView({block: 'center'}); }
 }
 
 function openOrderEditor(row) {
@@ -1448,19 +1686,7 @@ document.addEventListener('click', async event => {
     const field = name => document.querySelector(`[data-deviation-field="${name}"]`);
     if (action === 'edit-deviation') {
       if (!row?.dataset.deviationPk) { legacyNotice('Выберите отклонение', true); return; }
-      editingDeviationPk = row.dataset.deviationPk;
-      field('order').value = row.dataset.order;
-      updateDeviationJobs(row.dataset.jobId);
-      field('date').value = row.dataset.date;
-      field('hours').value = row.dataset.hours;
-      field('reason').value = row.dataset.reason;
-      if (!field('reason').value) {
-        field('reason').add(new Option(row.dataset.reason, row.dataset.reason));
-        field('reason').value = row.dataset.reason;
-      }
-      document.querySelector('[data-action="add-deviation"]').textContent = 'Сохранить';
-      field('hours').focus();
-      legacyNotice('Измените поля отклонения и нажмите «Сохранить»');
+      openDeviationEditor(row);
       return;
     }
     if (action === 'delete-deviation') {
@@ -1520,6 +1746,19 @@ document.addEventListener('click', async event => {
     if (response.ok) { row.remove(); legacyNotice('Изделие удалено'); }
     else { const result = await response.json(); legacyNotice(result.error || 'Не удалось удалить изделие', true); }
   }
+  if (action === 'archive-order') {
+    event.stopPropagation(); event.preventDefault();
+    const row = document.querySelector('.data-grid tbody tr.selected');
+    if (!row?.dataset.orderPk) { legacyNotice('Выберите заказ', true); return; }
+    if (!confirm(`Убрать заказ ${row.dataset.order} целиком из портфеля? Связанные данные сохранятся в архиве.`)) return;
+    try {
+      const response = await fetch(`/api/legacy/orders/${row.dataset.orderPk}/`, { method: 'DELETE', headers: apiHeaders(),
+        body: JSON.stringify({scope: 'order', reason: 'Архивирование заказа в портфеле'}) });
+      const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Не удалось архивировать заказ');
+      await loadOrdersFromServer(); legacyNotice('Заказ перенесён в архив');
+    } catch (error) { legacyNotice(error.message, true); }
+    return;
+  }
   if (action === 'import-1c') {
     event.stopPropagation(); event.preventDefault();
     const file = document.querySelector('#one-c-file')?.files[0];
@@ -1544,6 +1783,17 @@ installOrderFilters();
 installProductEstdActions();
 hideDeferredIntegrations();
 installDatabaseAdmin();
+installProfile();
+installMaintenance();
+if (['orders', 'products'].includes(document.body.dataset.page) && ['admin', 'technologist', 'manager'].includes(currentRole)) {
+  const edit = document.querySelector('[data-action="edit-order"]');
+  if (edit) edit.insertAdjacentHTML('afterend', ' <button class="btn" data-action="archive-order">Убрать заказ целиком</button>');
+}
+if (document.body.dataset.page === 'production') {
+  const edit = document.querySelector('.side-panel [data-action="edit-order"]');
+  const toolbar = document.querySelector('.toolbar');
+  if (edit && toolbar) toolbar.append(edit);
+}
 if (document.body.dataset.page === 'personnel' && currentRole === 'planner') {
   document.querySelectorAll('[data-module-action]').forEach(button => { button.hidden = true; });
 }
@@ -1578,7 +1828,10 @@ if (document.body.dataset.page === 'admin') {
     const user = serverUsers.find(item => item.username === original);
     const payload = { username: String(values.get('username') || '').trim(),
       fullName: String(values.get('fullName') || '').trim(),
-      password: String(values.get('password') || ''), role: String(values.get('role') || '') };
+      password: String(values.get('password') || ''), role: String(values.get('role') || ''),
+      isActive: event.currentTarget.elements.isActive.checked,
+      canChangeUsername: event.currentTarget.elements.canChangeUsername.checked,
+      canChangePassword: event.currentTarget.elements.canChangePassword.checked };
     try {
       const response = await fetch(user ? `/api/admin/users/${user.id}/` : '/api/admin/users/', {
         method: user ? 'PUT' : 'POST', headers: apiHeaders(), body: JSON.stringify(payload)

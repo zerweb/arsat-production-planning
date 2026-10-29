@@ -109,7 +109,7 @@ const pageViews = {
             <thead><tr><th>Роль</th><th>Рабочих мест</th><th>Доступные функции</th></tr></thead>
             <tbody>
               <tr><td><b>Начальник отдела</b></td><td>1</td><td>Контроль и аналитика, загрузка производства, утверждение планов и технологических процессов, сводные отчёты.</td></tr>
-              <tr><td><b>Инженер-технолог</b></td><td>10</td><td>Проектирование технологических процессов, справочники, документы ЕСТД, материалы и импорт NX CAM.</td></tr>
+              <tr><td><b>Инженер-технолог</b></td><td>10</td><td>Проектирование технологических процессов, справочники, документы ЕСТД и материалы.</td></tr>
               <tr><td><b>Инженер по нормированию труда</b></td><td>2</td><td>Расчёт норм времени, режимов обработки, укрупнённых нормативов и профильные отчёты.</td></tr>
               <tr><td><b>Администратор системы</b></td><td>—</td><td>Полный доступ, пользователи, роли и параметры подключения к серверу PostgreSQL.</td></tr>
             </tbody>
@@ -139,7 +139,9 @@ const pageViews = {
         <label class="form-modal-field required"><span>ФИО сотрудника</span><input name="fullName" required></label>
         <label class="form-modal-field required"><span>Пароль</span><input name="password" type="password" required></label>
         <label class="form-modal-field required"><span>Роль</span><select name="role" required><option value="technologist">Инженер-технолог</option><option value="normalizer">Инженер по нормированию труда</option><option value="manager">Начальник отдела</option><option value="admin">Администратор системы</option></select></label>
-        <label class="form-modal-field optional"><span>Фотография пользователя</span><input name="avatar" type="file" accept="image/png,image/jpeg,image/webp"></label>
+        <label class="form-modal-field"><span><input name="isActive" type="checkbox" checked> Учётная запись активна</span></label>
+        <label class="form-modal-field"><span><input name="canChangeUsername" type="checkbox"> Разрешить менять логин</span></label>
+        <label class="form-modal-field"><span><input name="canChangePassword" type="checkbox"> Разрешить менять пароль</span></label>
       </div>
       <footer><button type="button" class="ghost-button" data-dialog-close="user-dialog">Отмена</button><button class="primary-button" type="submit">Сохранить</button></footer>
     </form>
@@ -3336,6 +3338,9 @@ function openUserDialog(username = '') {
   form.elements.fullName.value = user?.fullName || '';
   form.elements.password.value = user?.password || '';
   form.elements.role.value = user?.role || 'technologist';
+  form.elements.isActive.checked = user ? user.isActive : true;
+  form.elements.canChangeUsername.checked = !!user?.canChangeUsername;
+  form.elements.canChangePassword.checked = !!user?.canChangePassword;
   form.elements.username.readOnly = user?.username === 'admin';
   dialog.showModal();
 }

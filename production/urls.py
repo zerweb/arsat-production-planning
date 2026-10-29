@@ -44,6 +44,9 @@ urlpatterns = [
     path("api/admin/backup/<str:name>/", legacy_ui.backup_download, name="backup_download"),
     path("api/admin/users/", legacy_ui.users_api, name="legacy_users_api"),
     path("api/admin/users/<int:pk>/", legacy_ui.user_api, name="legacy_user_api"),
+    path("api/admin/policy/", legacy_ui.policy_api, name="policy_api"),
+    path("api/profile/", legacy_ui.profile_api, name="profile_api"),
+    path("api/profile/avatar/", legacy_ui.profile_avatar, name="profile_avatar"),
     path("api/legacy/plans/", legacy_ui.plans_api, name="legacy_plans_api"),
     path("api/legacy/norming/", legacy_ui.norming_api, name="legacy_norming_api"),
     path("api/legacy/report/", legacy_ui.report_api, name="legacy_report_api"),
@@ -55,6 +58,7 @@ urlpatterns = [
     path("api/legacy/deviations/", legacy_ui.deviations_api, name="legacy_deviations_api"),
     path("api/legacy/deviations/<int:pk>/", legacy_ui.deviation_api, name="legacy_deviation_api"),
     path("api/legacy/orders/<int:pk>/", legacy_ui.order_api, name="legacy_order_api"),
+    path("api/legacy/table/<str:key>/row/", legacy_ui.table_row_api, name="legacy_table_row_api"),
     path("api/legacy/table/<str:key>/", legacy_ui.table_api, name="legacy_table_api"),
     path("<slug:name>.html", legacy_ui.page, name="legacy_page"),
 ]

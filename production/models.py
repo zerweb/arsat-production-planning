@@ -9,6 +9,18 @@ from django.db.models import Sum
 from django.utils import timezone
 
 
+class UserProfile(models.Model):
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="profile")
+    can_change_username = models.BooleanField(default=False)
+    can_change_password = models.BooleanField(default=False)
+    avatar = models.BinaryField(null=True, blank=True)
+
+
+class SitePolicy(models.Model):
+    maintenance = models.BooleanField(default=False)
+    maintenance_owner = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
+
+
 class NamedModel(models.Model):
     name = models.CharField("Наименование", max_length=200)
     archived = models.BooleanField("Архив", default=False)

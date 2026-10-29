@@ -99,6 +99,10 @@ def sign_in(request):
             return response
         user = authenticate(request, username=username, password=form.cleaned_data["password"])
         if user and user.is_active and role(user) != "unassigned":
+            policy = models.SitePolicy.objects.filter(pk=1, maintenance=True).only("maintenance_owner_id").first()
+            if policy and policy.maintenance_owner_id != user.pk:
+                form.add_error(None, "Вход временно приостановлен: выполняется техническое обслуживание.")
+                return render_login(request, form)
             cache.delete(user_key)
             login(request, user)
             models.AuditLog.objects.create(user=user, model_name="Session", object_id=user.pk, action="login")

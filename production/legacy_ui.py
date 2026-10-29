@@ -249,10 +249,97 @@ def backup_restore(request):
 
 
 def user_payload(user):
+    profile = getattr(user, "profile", None)
     return {"id": user.pk, "username": user.username,
         "fullName": user.get_full_name() or user.username,
         "role": user.groups.first().name if user.groups.exists() else ("admin" if user.is_superuser else "technologist"),
-        "isActive": user.is_active}
+        "isActive": user.is_active, "canChangeUsername": bool(profile and profile.can_change_username),
+        "canChangePassword": bool(profile and profile.can_change_password)}
+
+
+@login_required
+@require_http_methods(["GET", "PUT"])
+def policy_api(request):
+    from .models import SitePolicy
+    require_admin(request)
+    if request.method == "PUT":
+        try:
+            data = json.loads(request.body)
+            if not isinstance(data.get("maintenance"), bool):
+                raise ValueError("Укажите состояние технического режима")
+            policy, _ = SitePolicy.objects.update_or_create(pk=1, defaults={
+                "maintenance": data["maintenance"], "maintenance_owner": request.user if data["maintenance"] else None})
+            AuditLog.objects.create(user=request.user, model_name="SitePolicy", object_id=1, action="update", reason="Технический режим")
+        except (ValueError, TypeError) as exc:
+            return JsonResponse({"ok": False, "error": str(exc)}, status=400)
+    else:
+        policy = SitePolicy.objects.filter(pk=1).first()
+    return JsonResponse({"maintenance": bool(policy and policy.maintenance)})
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def profile_api(request):
+    from .models import UserProfile
+    from django.contrib.auth import update_session_auth_hash
+    from PIL import Image, ImageOps, UnidentifiedImageError
+    profile, _ = UserProfile.objects.get_or_create(user=request.user)
+    user = request.user
+    allow_name = profile.can_change_username or user.is_superuser
+    allow_password = profile.can_change_password or user.is_superuser
+    if request.method == "POST":
+        try:
+            username = request.POST.get("username", user.username).strip()
+            email = request.POST.get("email", "").strip()
+            password = request.POST.get("new_password", "")
+            name_changed = username != user.username
+            if name_changed and not allow_name or password and not allow_password:
+                raise PermissionDenied
+            if (name_changed or password) and not user.check_password(request.POST.get("current_password", "")):
+                raise ValueError("Укажите действующий пароль")
+            user.username, user.email = username, email
+            user.full_clean(exclude=["password"])
+            if password:
+                validate_password(password, user)
+            avatar = request.FILES.get("avatar")
+            image_bytes = None
+            if avatar:
+                if avatar.size > 2 * 1024 * 1024:
+                    raise ValueError("Фотография должна быть не больше 2 МБ")
+                with Image.open(avatar) as image:
+                    if image.format not in ("PNG", "JPEG", "WEBP") or image.width * image.height > 4_000_000:
+                        raise ValueError("Допустимы изображения PNG, JPEG или WebP до 4 мегапикселей")
+                    image = ImageOps.exif_transpose(image)
+                    image.thumbnail((256, 256))
+                    output = io.BytesIO()
+                    image.convert("RGBA").save(output, format="PNG")
+                    image_bytes = output.getvalue()
+            with transaction.atomic():
+                if password:
+                    user.set_password(password)
+                user.save()
+                if image_bytes is not None:
+                    profile.avatar = image_bytes
+                    profile.save(update_fields=["avatar"])
+                AuditLog.objects.create(user=user, model_name="User", object_id=user.pk, action="update", reason="Изменение профиля")
+            if password:
+                update_session_auth_hash(request, user)
+        except (ValueError, ValidationError, IntegrityError, OSError, UnidentifiedImageError, Image.DecompressionBombError) as exc:
+            return JsonResponse({"ok": False, "error": str(exc)}, status=400)
+    return JsonResponse({"username": user.username, "email": user.email, "fullName": user.get_full_name() or user.username,
+        "canChangeUsername": allow_name, "canChangePassword": allow_password, "hasAvatar": bool(profile.avatar)})
+
+
+@login_required
+@require_http_methods(["GET"])
+def profile_avatar(request):
+    from .models import UserProfile
+    avatar = UserProfile.objects.filter(user=request.user).values_list("avatar", flat=True).first()
+    if not avatar:
+        raise Http404
+    response = HttpResponse(bytes(avatar), content_type="image/png")
+    response["X-Content-Type-Options"] = "nosniff"
+    return response
 
 
 @login_required
@@ -303,12 +390,25 @@ def save_user_api(request, user=None):
             parts = full_name.split(" ", 1)
             user.first_name = parts[0]
             user.last_name = parts[1] if len(parts) > 1 else ""
-            user.is_active = True
+            requested_active = data.get("isActive", user.is_active if not creating else True)
+            if not isinstance(requested_active, bool):
+                raise ValueError("Неверное состояние учётной записи")
+            if not requested_active and (user.pk == request.user.pk or user.is_superuser):
+                raise ValueError("Нельзя отключить свою учётную запись или суперпользователя")
+            user.is_active = requested_active
             if password:
                 validate_password(password, user)
                 user.set_password(password)
             user.full_clean(exclude=["password"])
             user.save()
+            from .models import UserProfile
+            profile, _ = UserProfile.objects.get_or_create(user=user)
+            for key, field in (("canChangeUsername", "can_change_username"), ("canChangePassword", "can_change_password")):
+                if key in data:
+                    if not isinstance(data[key], bool):
+                        raise ValueError("Неверное значение разрешения")
+                    setattr(profile, field, data[key])
+            profile.save()
             group, _ = Group.objects.get_or_create(name=new_role)
             user.groups.set([group])
             AuditLog.objects.create(user=request.user, model_name="User", object_id=user.pk,
@@ -985,6 +1085,60 @@ def orders_api(request):
 
 
 @login_required
+@require_http_methods(["POST"])
+def table_row_api(request, key):
+    """Изменяет одну запись, не затирая другие строки таблицы."""
+    if key not in ("personnel", "operations", "timesheet"):
+        raise Http404
+    if role(request.user) not in TABLE_ROLES[key] and not request.user.is_superuser:
+        raise PermissionDenied
+    try:
+        data = json.loads(request.body)
+        row = data.get("row")
+        original = str(data.get("original", "")).strip()
+        if not isinstance(row, list) or len(row) > 30 or any(isinstance(v, (list, dict)) or len(str(v)) > 2000 for v in row):
+            raise ValueError("Неверный формат записи")
+        with transaction.atomic():
+            if key == "personnel":
+                list(Employee.objects.select_for_update().values_list("pk", flat=True))
+                rows = legacy_tables.personnel_rows()
+            elif key == "operations":
+                from .models import OperationDefinition
+                list(OperationDefinition.objects.select_for_update().values_list("pk", flat=True))
+                rows = legacy_tables.operations_rows(include_inactive=True)
+            else:
+                from .models import TimesheetEntry
+                month = legacy_tables.month_from_text(data.get("month"))
+                list(TimesheetEntry.objects.select_for_update().filter(month=month).values_list("pk", flat=True))
+                rows = legacy_tables.timesheet_rows(month)
+            matches = [i for i, value in enumerate(rows) if value[0] == original] if original else []
+            if original and not matches:
+                raise ValueError("Запись уже изменена или удалена. Обновите страницу")
+            new_key = str(row[0]).strip() if row else ""
+            if any(values[0] == new_key and values[0] != original for values in rows):
+                raise ValueError("Запись с таким кодом уже существует")
+            if matches:
+                rows[matches[0]] = row
+            else:
+                rows.append(row)
+            renamed = {new_key: original} if original and original != new_key else None
+            if key == "personnel":
+                legacy_tables.save_personnel([row], renamed=renamed, archive_missing=False)
+            elif key == "operations":
+                legacy_tables.save_operations([row], renamed=renamed, archive_missing=False)
+            else:
+                legacy_tables.save_timesheet([row], month, delete_missing=False)
+                if original and original != new_key:
+                    previous = legacy_tables._employee_by_number(original)
+                    if previous:
+                        TimesheetEntry.objects.filter(employee=previous, month=month).delete()
+            AuditLog.objects.create(user=request.user, model_name=key, object_id=0, action="update" if original else "create", reason="Изменение строки")
+        return JsonResponse({"ok": True})
+    except (ValueError, TypeError, ValidationError, IntegrityError) as exc:
+        return JsonResponse({"ok": False, "error": str(exc)}, status=400)
+
+
+@login_required
 @require_http_methods(["GET", "PUT"])
 def table_api(request, key):
     if key not in TABLES:
@@ -1070,14 +1224,19 @@ def order_api(request, pk):
         before = snapshot(order)
         with transaction.atomic():
             if request.method == "DELETE":
-                item = get_object_or_404(OrderItem, pk=data.get("item_id"), order=order)
-                if order.items.count() > 1:
-                    item.delete()
-                    action = "delete_item"
-                else:
+                if data.get("scope") == "order":
                     order.archived = True
                     order.save(update_fields=["archived"])
                     action = "archive"
+                else:
+                    item = get_object_or_404(OrderItem, pk=data.get("item_id"), order=order)
+                    if order.items.count() > 1:
+                        item.delete()
+                        action = "delete_item"
+                    else:
+                        order.archived = True
+                        order.save(update_fields=["archived"])
+                        action = "archive"
             else:
                 if data.get("number"):
                     order.number = str(data["number"]).strip()

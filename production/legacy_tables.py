@@ -50,7 +50,7 @@ def _employee_by_number(number):
     return Employee.objects.filter(pk=int(number), personnel_number__isnull=True).first() if number.isdecimal() else None
 
 
-def save_operations(rows):
+def save_operations(rows, renamed=None, archive_missing=True):
     codes = set()
     for row in rows:
         if len(row) < 8:
@@ -62,7 +62,9 @@ def save_operations(rows):
             raise ValueError("Код, название и вид операции обязательны; коды не должны повторяться")
         codes.add(code)
         equipment_name = _text(row[3], "Оборудование", 200)
-        definition = OperationDefinition.objects.filter(code=code).first() or OperationDefinition(code=code)
+        original = renamed.get(code) if renamed else None
+        definition = OperationDefinition.objects.filter(code=original or code).first() or OperationDefinition(code=code)
+        definition.code = code
         definition.name = name
         definition.kind = kind
         definition.equipment = Equipment.objects.filter(name=equipment_name, archived=False).first()
@@ -80,7 +82,8 @@ def save_operations(rows):
                     route.save(update_fields=["definition"])
         # Изменение справочника не должно оставлять прежнее утверждение маршрута.
         RouteOperation.objects.filter(definition=definition).exclude(name=name).update(name=name, approved=False)
-    OperationDefinition.objects.exclude(code__in=codes).update(active=False)
+    if archive_missing:
+        OperationDefinition.objects.exclude(code__in=codes).update(active=False)
 
 
 def operations_rows(include_inactive=False):
@@ -94,7 +97,7 @@ def operations_rows(include_inactive=False):
             for item in definitions.order_by("code")]
 
 
-def save_personnel(rows):
+def save_personnel(rows, renamed=None, archive_missing=True):
     numbers = set()
     for row in rows:
         if len(row) < 8:
@@ -117,7 +120,8 @@ def save_personnel(rows):
         except ValueError as exc:
             raise ValueError("Дата приема должна быть в формате ДД.ММ.ГГГГ") from exc
         department, _ = Department.objects.get_or_create(name=department_name)
-        employee = _employee_by_number(number) or Employee(personnel_number=number)
+        original = renamed.get(number) if renamed else None
+        employee = _employee_by_number(original or number) or Employee(personnel_number=number)
         employee.personnel_number = number
         employee.name = name
         employee.department = department
@@ -129,7 +133,8 @@ def save_personnel(rows):
         employee.archived = False
         employee.full_clean()
         employee.save()
-    Employee.objects.exclude(personnel_number__in=numbers).update(archived=True)
+    if archive_missing:
+        Employee.objects.exclude(personnel_number__in=numbers).update(archived=True)
 
 
 def personnel_rows():
@@ -139,7 +144,7 @@ def personnel_rows():
             for item in Employee.objects.select_related("department").filter(archived=False).order_by("personnel_number", "pk")]
 
 
-def save_timesheet(rows, month):
+def save_timesheet(rows, month, delete_missing=True):
     employee_ids = set()
     for row in rows:
         if len(row) < 9:
@@ -158,7 +163,8 @@ def save_timesheet(rows, month):
             setattr(entry, field, _number(value, label))
         entry.full_clean()
         entry.save()
-    TimesheetEntry.objects.filter(month=month).exclude(employee_id__in=employee_ids).delete()
+    if delete_missing:
+        TimesheetEntry.objects.filter(month=month).exclude(employee_id__in=employee_ids).delete()
 
 
 def timesheet_rows(month):

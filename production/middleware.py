@@ -21,6 +21,15 @@ class AssignedRoleRequiredMiddleware:
 
     def process_view(self, request, view_func, view_args, view_kwargs):
         user = request.user
+        if user.is_authenticated and not request.path.startswith(("/static/", "/assets/", "/health/", "/logout/")):
+            from .models import SitePolicy
+            from django.http import HttpResponse, JsonResponse
+            policy = SitePolicy.objects.filter(pk=1, maintenance=True).only("maintenance_owner_id").first()
+            if policy and policy.maintenance_owner_id != user.pk:
+                message = "Вход временно приостановлен: выполняется техническое обслуживание."
+                if request.path.startswith("/api/"):
+                    return JsonResponse({"ok": False, "error": message}, status=503)
+                return HttpResponse(message, status=503, content_type="text/plain; charset=utf-8")
         if not user.is_authenticated or user.is_superuser:
             return None
         groups = list(user.groups.values_list("name", flat=True))

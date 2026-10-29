@@ -1153,6 +1153,81 @@ class WorkflowTests(TestCase):
         self.assertIn("для сборочного процесса требуется отдельная форма 2", card["gaps"])
 
 
+    def test_personnel_number_change_preserves_employee_and_timesheet(self):
+        from . import legacy_tables
+        employee = m.Employee.objects.filter(archived=False).first()
+        original = employee.personnel_number or str(employee.pk).zfill(3)
+        entry = m.TimesheetEntry.objects.create(employee=employee, month=date(2026, 1, 1), planned_hours=10)
+        row = next(row for row in legacy_tables.personnel_rows() if row[0] == original)
+        row[0] = "EDIT-999"
+        response = self.client.post("/api/legacy/table/personnel/row/", data=json.dumps({"row": row, "original": original}), content_type="application/json")
+        self.assertEqual(response.status_code, 200, response.content)
+        employee.refresh_from_db(); entry.refresh_from_db()
+        self.assertEqual(employee.personnel_number, "EDIT-999")
+        self.assertEqual(entry.employee_id, employee.pk)
+
+    def test_operation_rename_preserves_route_link(self):
+        from . import legacy_tables
+        definition = m.OperationDefinition.objects.first()
+        route = m.RouteOperation.objects.first()
+        route.definition = definition; route.save(update_fields=["definition"])
+        row = next(row for row in legacy_tables.operations_rows(True) if row[0] == definition.code)
+        old = row[0]; row[0] = "EDIT-999"
+        response = self.client.post("/api/legacy/table/operations/row/", data=json.dumps({"row": row, "original": old}), content_type="application/json")
+        self.assertEqual(response.status_code, 200, response.content)
+        definition.refresh_from_db(); route.refresh_from_db()
+        self.assertEqual(definition.code, "EDIT-999")
+        self.assertEqual(route.definition_id, definition.pk)
+
+    def test_profile_permissions_and_current_password(self):
+        user = User.objects.get(username="user")
+        self.client.force_login(user)
+        response = self.client.post("/api/profile/", {"username": "changed", "current_password": "user"})
+        self.assertEqual(response.status_code, 403)
+        profile = m.UserProfile.objects.get(user=user)
+        profile.can_change_username = True; profile.can_change_password = True; profile.save()
+        response = self.client.post("/api/profile/", {"username": "changed", "current_password": "wrong"})
+        self.assertEqual(response.status_code, 400)
+        response = self.client.post("/api/profile/", {"username": "changed", "email": "user@example.org", "current_password": "user", "new_password": "Very-long-unique-pass-987!"})
+        self.assertEqual(response.status_code, 200, response.content)
+        user.refresh_from_db()
+        self.assertTrue(user.check_password("Very-long-unique-pass-987!"))
+        self.assertEqual(self.client.get("/api/profile/").status_code, 200)
+
+    def test_maintenance_blocks_existing_session_and_other_logins(self):
+        other = Client(HTTP_HOST="127.0.0.1")
+        self.assertTrue(other.login(username="user", password="user"))
+
+        response = self.client.put("/api/admin/policy/", data=json.dumps({"maintenance": True}), content_type="application/json")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(other.get("/api/profile/").status_code, 503)
+        self.assertEqual(self.client.get("/api/admin/policy/").status_code, 200)
+        other.logout()
+        response = other.post("/login/", {"username": "user", "password": "user"})
+        self.assertContains(response, "временно приостановлен")
+        self.client.put("/api/admin/policy/", data=json.dumps({"maintenance": False}), content_type="application/json")
+        self.assertTrue(other.login(username="user", password="user"))
+
+    def test_profile_photo_rejects_non_image_and_keeps_private(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        user = User.objects.get(username="user")
+        self.client.force_login(user)
+        response = self.client.post("/api/profile/", {"avatar": SimpleUploadedFile("avatar.png", b"not an image", content_type="image/png")})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(self.client.get("/api/profile/avatar/").status_code, 404)
+        anonymous = Client(HTTP_HOST="127.0.0.1")
+        self.assertEqual(anonymous.get("/api/profile/avatar/").status_code, 302)
+
+    def test_archiving_complete_order_preserves_its_items(self):
+        order = m.Order.objects.filter(archived=False).first()
+        count = order.items.count()
+        response = self.client.delete(f"/api/legacy/orders/{order.pk}/", data=json.dumps({"scope": "order"}), content_type="application/json")
+        self.assertEqual(response.status_code, 200, response.content)
+        order.refresh_from_db()
+        self.assertTrue(order.archived)
+        self.assertEqual(order.items.count(), count)
+
+
 class SampleImportTests(TestCase):
     def test_installer_distinguishes_empty_sample_and_existing_database(self):
         output = io.StringIO()
