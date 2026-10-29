@@ -5,6 +5,9 @@ import io
 import zipfile
 import tempfile
 import time
+import os
+import subprocess
+import unittest
 from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
@@ -25,6 +28,26 @@ from django.db import migrations, models as django_models
 
 
 class PostgreSQLClientSelectionTests(SimpleTestCase):
+    @unittest.skipIf(os.name == "nt", "Проверка прав доступа Linux")
+    def test_update_repairs_code_permissions_without_exposing_secrets(self):
+        script = Path(__file__).resolve().parent.parent / "tools" / "ensure_code_access.sh"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            (root / "production" / "migrations").mkdir(parents=True)
+            source = root / "production" / "migrations" / "test.py"
+            source.write_text("pass\n")
+            secret = root / ".env"
+            secret.write_text("secret")
+            subprocess.run(["git", "add", "production/migrations/test.py"], cwd=root, check=True)
+            source.chmod(0o600)
+            source.parent.chmod(0o700)
+            secret.chmod(0o600)
+            subprocess.run(["bash", str(script)], cwd=root, check=True)
+            self.assertEqual(source.stat().st_mode & 0o777, 0o644)
+            self.assertEqual(source.parent.stat().st_mode & 0o777, 0o755)
+            self.assertEqual(secret.stat().st_mode & 0o777, 0o600)
+
     def test_update_allows_additions_and_blocks_data_or_schema_removal(self):
         additive = SimpleNamespace(app_label='production', name='addition', operations=[
             migrations.AddField('orderitem', 'example', django_models.CharField(max_length=20, default=''))])

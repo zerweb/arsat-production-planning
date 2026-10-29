@@ -496,7 +496,7 @@ open_host_firewall() {
 }
 
 health_check() {
-    local attempt response
+    local attempt response status
     for attempt in {1..20}; do
         if [[ "$USE_HTTPS" == 1 ]]; then
             local -a tls_options=()
@@ -511,7 +511,27 @@ health_check() {
         sleep 1
     done
     echo 'Сайт не ответил на проверку /health/ready/. Посмотрите journalctl -u avt и nginx -t' >&2
+    status="$(systemctl is-active "$SERVICE_NAME" 2>/dev/null || true)"
+    echo "Состояние службы: ${status:-неизвестно}. Проверка приложения: curl -i http://127.0.0.1:$APP_PORT/health/ready/" >&2
     return 1
+}
+
+repair_code_access() {
+    [[ -f "$PROJECT_ROOT/tools/ensure_code_access.sh" ]] || fail 'Сначала обновите проект через пункт 4 меню'
+    bash "$PROJECT_ROOT/tools/ensure_code_access.sh"
+}
+
+repair_service() {
+    [[ -f "$ENV_FILE" && -x "$PYTHON" ]] || fail 'Сначала выполните установку проекта'
+    load_current_site
+    repair_code_access
+    "$PYTHON" manage.py check --database default
+    "$PYTHON" manage.py collectstatic --noinput --verbosity 0
+    find "$PROJECT_ROOT/staticfiles" -type d -exec chmod 755 {} +
+    find "$PROJECT_ROOT/staticfiles" -type f -exec chmod 644 {} +
+    systemctl start "$SERVICE_NAME"
+    health_check
+    echo 'Служба запущена и проверена. База данных не восстанавливалась и не изменялась этим действием.'
 }
 
 show_result() {
@@ -687,7 +707,7 @@ update_failed() {
         echo "Резервная копия базы сохранена: $UPDATE_BACKUP" >&2
     fi
     if [[ "${UPDATE_MIGRATIONS_STARTED:-0}" == 1 ]]; then
-        echo 'Применение миграций уже началось. Служба оставлена остановленной: проверьте ошибку и резервную копию перед восстановлением.' >&2
+        echo 'Применение миграций уже началось. Проверьте состояние службы и журнал; база автоматически не восстанавливалась.' >&2
     else
         local rollback_ok=1
         if [[ "${UPDATE_CODE_SWITCHED:-0}" == 1 ]]; then
@@ -737,7 +757,7 @@ update_project() {
     UPDATE_OLD="$(git rev-parse HEAD)"
     UPDATE_TARGET="$(git rev-parse FETCH_HEAD)"
     if [[ "$UPDATE_OLD" == "$UPDATE_TARGET" ]]; then
-        echo 'Установлена последняя версия проекта.'
+        echo 'Установлена последняя версия проекта. Для проверки и восстановления службы выберите пункт 5 меню.'
         return 0
     fi
     git merge-base --is-ancestor "$UPDATE_OLD" "$UPDATE_TARGET" || fail 'Ветки разошлись; автоматическое обновление остановлено'
@@ -812,8 +832,9 @@ update_project() {
     chmod 600 "$backup_temp"
     chown www-data:www-data "$backup_temp"
     mv "$backup_temp" "$UPDATE_BACKUP"
-    git merge --ff-only "$UPDATE_TARGET"
+    (umask 022; git merge --ff-only "$UPDATE_TARGET")
     UPDATE_CODE_SWITCHED=1
+    repair_code_access
     mv "$PROJECT_ROOT/.venv" "$UPDATE_PREVIOUS_VENV"
     UPDATE_VENV_MOVED=1
     ln -s "$UPDATE_VENV_DIR" "$PROJECT_ROOT/.venv"
@@ -839,6 +860,7 @@ echo '1 — новая установка'
 echo '2 — изменить настройки сайта или PostgreSQL'
 echo '3 — сбросить пароль пользователя (включая admin)'
 echo '4 — проверить и установить обновление проекта'
+echo '5 — проверить и восстановить запуск службы'
 if [[ -f "$ENV_FILE" ]]; then default_action=2; else default_action=1; fi
 ACTION="$(ask 'Выберите действие' "$default_action")"
 case "$ACTION" in
@@ -851,5 +873,6 @@ case "$ACTION" in
         cp "${BASH_SOURCE[0]}" "$update_script"
         AVT_UPDATE_REEXEC=1 AVT_PROJECT_ROOT="$PROJECT_ROOT" bash "$update_script" --update
         ;;
-    *) fail 'Выберите 1, 2, 3 или 4' ;;
+    5) repair_service ;;
+    *) fail 'Выберите 1, 2, 3, 4 или 5' ;;
 esac
