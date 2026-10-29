@@ -89,11 +89,13 @@ choose_site() {
         4) LISTEN_ADDRESS=0.0.0.0; USE_HTTPS=1 ;;
         *) fail 'Выберите 1, 2, 3 или 4' ;;
     esac
-    if [[ "$ACCESS_MODE" == 4 ]]; then SITE_PORT=443
+    if [[ "$ACCESS_MODE" == 4 ]]; then
+        SITE_PORT="$(ask 'Порт HTTPS-сайта (например, 443 или 8880)' "${current_port:-443}")"
     else
         SITE_PORT="$(ask 'Порт веб-сайта' "${current_port:-8080}")"
-        valid_port "$SITE_PORT" && [[ "$SITE_PORT" != "$APP_PORT" ]] || fail 'Недопустимый порт сайта'
     fi
+    valid_port "$SITE_PORT" && [[ "$SITE_PORT" != "$APP_PORT" ]] || fail 'Недопустимый порт сайта'
+    [[ "$ACCESS_MODE" != 4 || "$SITE_PORT" != 80 ]] || fail 'Порт 80 необходим для проверки сертификата; выберите другой порт HTTPS'
     if [[ "$ACCESS_MODE" == 3 ]]; then
         SITE_HOST=127.0.0.1
     else
@@ -304,10 +306,12 @@ SERVICE
 }
 
 write_nginx() {
-    local listen tls_lines temp
+    local listen tls_lines temp https_authority
     temp="$(mktemp "/etc/nginx/sites-available/.avt-tmp.XXXXXX")"
     : > "$temp"
     if [[ "$ACCESS_MODE" == 4 ]]; then
+        https_authority="$SITE_HOST"
+        if [[ "$SITE_PORT" != 443 ]]; then https_authority="$SITE_HOST:$SITE_PORT"; fi
         # Порт 80 оставляем для проверки домена и перенаправления на HTTPS.
         cat >> "$temp" <<NGINX
 server {
@@ -317,7 +321,7 @@ server {
         root $ACME_WEBROOT;
         try_files \$uri =404;
     }
-    location / { return 308 https://$SITE_HOST\$request_uri; }
+    location / { return 308 https://$https_authority\$request_uri; }
 }
 NGINX
     fi
@@ -345,7 +349,7 @@ $tls_lines
     }
     location / {
         proxy_pass http://127.0.0.1:$APP_PORT;
-        proxy_set_header Host \$host;
+        proxy_set_header Host \$http_host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
@@ -486,7 +490,7 @@ health_check() {
 }
 
 show_result() {
-    if [[ "$ACCESS_MODE" == 4 ]]; then printf 'Сайт: https://%s/\n' "$SITE_HOST"
+    if [[ "$ACCESS_MODE" == 4 && "$SITE_PORT" == 443 ]]; then printf 'Сайт: https://%s/\n' "$SITE_HOST"
     elif [[ "$USE_HTTPS" == 1 ]]; then printf 'Сайт: https://%s:%s/\n' "$SITE_HOST" "$SITE_PORT"
     else printf 'Сайт: http://%s:%s/\n' "$SITE_HOST" "$SITE_PORT"; fi
     if [[ "$ACCESS_MODE" != 3 ]]; then
