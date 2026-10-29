@@ -39,7 +39,7 @@ def worker_env():
 
 
 def pg_bin(name):
-    return postgres_bin(name)
+    return postgres_bin(name, env_values().get("PG_BIN_DIR"))
 
 
 def status(state, message, backup=""):

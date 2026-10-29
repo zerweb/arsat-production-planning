@@ -6,8 +6,8 @@ import subprocess
 from pathlib import Path
 
 
-def postgres_bin(name):
-    configured = os.getenv("PG_BIN_DIR")
+def postgres_bin(name, configured=None):
+    configured = configured or os.getenv("PG_BIN_DIR")
     if configured:
         candidate = Path(configured) / name
         if candidate.is_file():

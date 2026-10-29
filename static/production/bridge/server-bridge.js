@@ -28,7 +28,9 @@ function installTppFields() {
     deviationForm.querySelector('[data-deviation-field="order"]').addEventListener('input', () => updateDeviationJobs());
     const [year, month] = document.querySelectorAll('.deviation-period-grid select');
     year.dataset.deviationPeriod = 'year'; month.dataset.deviationPeriod = 'month';
+    year.replaceChildren(new Option('Все годы', '')); month.replaceChildren(new Option('Все месяцы', ''));
     year.addEventListener('change', filterDeviations); month.addEventListener('change', filterDeviations);
+    document.querySelector('.deviation-period-grid [data-report]').dataset.action = 'deviation-report-preview';
   }
 }
 
@@ -841,6 +843,36 @@ function filterDeviations() {
     row.hidden = Boolean((year && row.dataset.date.slice(0, 4) !== year) ||
       (month && row.dataset.date.slice(5, 7) !== month));
   });
+  const selected = document.querySelector('.deviation-page .data-grid tbody tr.selected');
+  if (selected?.hidden) {
+    selected.classList.remove('selected');
+    [...selected.parentElement.rows].find(row => !row.hidden)?.classList.add('selected');
+  }
+}
+
+function previewDeviationReport() {
+  let dialog = document.querySelector('#deviation-report-dialog');
+  if (!dialog) {
+    document.body.insertAdjacentHTML('beforeend', `<dialog class="backup-dialog product-list-dialog" id="deviation-report-dialog">
+      <section class="content-card backup-admin-card"><div class="card-heading"><h3>Отклонения за выбранный период</h3>
+      <button class="ghost-button" type="button" data-deviation-report-close>Закрыть</button></div>
+      <div class="table-wrap"><table class="data-grid"><thead><tr><th>Дата</th><th>Заказ</th><th>Изделие</th><th>Задание</th><th>Часы</th><th>Причина</th></tr></thead><tbody></tbody></table></div>
+      <p data-deviation-report-total></p></section></dialog>`);
+    dialog = document.querySelector('#deviation-report-dialog');
+    dialog.querySelector('[data-deviation-report-close]').addEventListener('click', () => dialog.close());
+  }
+  const body = dialog.querySelector('tbody'); body.replaceChildren();
+  const rows = [...document.querySelectorAll('.deviation-page .data-grid tbody tr')].filter(row => !row.hidden);
+  let total = 0;
+  rows.forEach(source => {
+    const job = deviationJobs.find(item => String(item.id) === source.dataset.jobId);
+    const values = [legacyDate(source.dataset.date), source.dataset.order, source.cells[3].textContent,
+      job?.label || '', source.dataset.hours, source.dataset.reason];
+    const row = body.insertRow(); values.forEach(value => { row.insertCell().textContent = value || ''; });
+    total += Number(source.dataset.hours) || 0;
+  });
+  dialog.querySelector('[data-deviation-report-total]').textContent = `Записей: ${rows.length}; всего часов: ${total.toFixed(2)}`;
+  dialog.showModal();
 }
 
 async function loadDeviationsFromServer() {
@@ -1209,6 +1241,9 @@ document.addEventListener('click', async event => {
       }
     } catch (error) { legacyNotice(error.message, true); }
     return;
+  }
+  if (action === 'deviation-report-preview') {
+    event.stopPropagation(); event.preventDefault(); previewDeviationReport(); return;
   }
   if (action === 'backup-open') {
     event.stopPropagation(); event.preventDefault();

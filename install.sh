@@ -68,7 +68,14 @@ server_ip() {
 [[ -f "$PROJECT_ROOT/manage.py" ]] || fail 'Рядом с install.sh нет manage.py'
 [[ "$PROJECT_ROOT" != *[[:space:]]* ]] || fail 'Путь проекта не должен содержать пробелы'
 command -v apt-get >/dev/null && command -v systemctl >/dev/null || fail 'Нужны APT и systemd'
-command -v python3 >/dev/null || fail 'Нужен Python 3'
+if ! command -v python3 >/dev/null; then
+    echo 'Устанавливаю Python 3.'
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y python3
+fi
+python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' ||
+    fail 'Для Django 5.2 нужен Python 3.10 или новее. Обновите Python через совместимые репозитории системы.'
 [[ -r /dev/tty ]] || fail 'Нужен интерактивный терминал'
 umask 077
 cd "$PROJECT_ROOT"
@@ -156,6 +163,24 @@ load_current_database() {
 app_psql() {
     PGPASSWORD="$DB_PASSWORD" PGCONNECT_TIMEOUT=5 psql -X -w --host "$DB_HOST" --port "$DB_PORT" \
         --username "$DB_USER" --dbname "$DB_NAME" -v ON_ERROR_STOP=1 "$@"
+}
+
+ensure_postgres_client() {
+    local server_version major selected client_version
+    server_version="$(app_psql -Atqc 'SHOW server_version_num')"
+    [[ "$server_version" =~ ^[0-9]+$ ]] || fail 'Не удалось определить версию сервера PostgreSQL'
+    major=$((10#$server_version / 10000))
+    selected="$(PG_BIN_DIR="$(env_value PG_BIN_DIR)" python3 -c 'from tools.pg_tools import postgres_bin; print(postgres_bin("pg_dump"))')"
+    client_version="$("$selected" --version 2>/dev/null | sed -nE 's/.* ([0-9]+)(\.[0-9]+)?.*/\1/p' || true)"
+    if [[ "$client_version" =~ ^[0-9]+$ ]] && (( 10#$client_version >= major )); then return 0; fi
+    echo "Для резервных копий PostgreSQL $major требуется совместимый pg_dump. Ищу postgresql-client-$major в настроенных репозиториях."
+    if apt-cache show "postgresql-client-$major" >/dev/null 2>&1 && apt-get install -y "postgresql-client-$major"; then
+        if [[ -n "$(env_value PG_BIN_DIR)" ]]; then
+            echo 'Проверьте PG_BIN_DIR в .env: заданный каталог имеет приоритет при выборе клиента.' >&2
+        fi
+    else
+        echo "Внимание: установите postgresql-client-$major из совместимого репозитория; резервное копирование до этого недоступно." >&2
+    fi
 }
 check_database_schema() {
     local status table_count django_migrations production_order
@@ -530,9 +555,10 @@ install_new() {
     trap installation_failed ERR
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
-    apt-get install -y python3 python3-venv python3-dev libpq-dev postgresql-client nginx curl
+    apt-get install -y python3 python3-venv python3-dev libpq-dev postgresql-client nginx curl fonts-dejavu-core
     if [[ "$ACCESS_MODE" == 4 ]]; then apt-get install -y certbot; fi
     choose_database
+    ensure_postgres_client
     IMPORT_SAMPLE="$(ask 'Импортировать тестовые данные? (y/n)' n)"
     [[ "$IMPORT_SAMPLE" =~ ^[yYnN]$ ]] || fail 'Ответьте y или n'
     prepare_python
@@ -581,6 +607,10 @@ rollback_settings() {
 
 modify_settings() {
     [[ -f "$ENV_FILE" && -x "$PYTHON" ]] || fail 'Сначала выполните новую установку'
+    if [[ ! -r /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf ]]; then
+        apt-get update
+        apt-get install -y fonts-dejavu-core
+    fi
     load_current_site
     load_current_database
     SERVICE_WAS_PRESENT=0
@@ -603,6 +633,7 @@ modify_settings() {
         IMPORT_SAMPLE="$(ask 'Импортировать тестовые данные, если новая база пуста? (y/n)' n)"
         [[ "$IMPORT_SAMPLE" =~ ^[yYnN]$ ]] || fail 'Ответьте y или n'
     fi
+    ensure_postgres_client
     prepare_runtime
     BACKUP_ENV="$(mktemp "$PROJECT_ROOT/.runtime/.env-before.XXXXXX")"
     BACKUP_NGINX="$(mktemp "$PROJECT_ROOT/.runtime/.nginx-before.XXXXXX")"

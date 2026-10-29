@@ -4,6 +4,7 @@ from decimal import Decimal
 from html import escape
 from io import BytesIO
 from pathlib import Path
+import os
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
@@ -117,10 +118,11 @@ def route_card_data(product, item=None):
 def _font():
     if "ESTD" in pdfmetrics.getRegisteredFontNames():
         return "ESTD"
-    candidates = (
+    candidates = ([Path(os.environ["AVT_PDF_FONT"])] if os.environ.get("AVT_PDF_FONT") else []) + [
         Path("C:/Windows/Fonts/arial.ttf"),
         Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
-    )
+        Path("/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf"),
+    ]
     source = next((path for path in candidates if path.is_file()), None)
     if source is None:
         raise RuntimeError("Для печати ЕСТД нужен шрифт Arial или DejaVu Sans")

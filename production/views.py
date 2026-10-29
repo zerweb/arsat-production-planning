@@ -31,14 +31,12 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.utils import simpleSplit
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from .forms import REGISTRY, LoginForm, UserForm, form_for
 from .export_security import spreadsheet_value
 from . import models
 from .scheduling import assign_worker
-from .estd import render_route_card, route_card_data
+from .estd import _font as cyrillic_pdf_font, render_route_card, route_card_data
 
 logger = logging.getLogger(__name__)
 
@@ -574,12 +572,11 @@ def reserve_material(request, pk):
 
 def pdf_response(title, headers, rows, filename):
     output = io.BytesIO()
-    font_file = "C:/Windows/Fonts/arial.ttf"
-    pdfmetrics.registerFont(TTFont("Arial-Cyr", font_file))
+    font = cyrillic_pdf_font()
     doc = SimpleDocTemplate(output, pagesize=landscape(A4), leftMargin=30, rightMargin=30, topMargin=30, bottomMargin=30)
     styles = getSampleStyleSheet()
-    styles.add(ParagraphStyle(name="CyrTitle", fontName="Arial-Cyr", fontSize=15, leading=19, spaceAfter=15))
-    styles.add(ParagraphStyle(name="CyrCell", fontName="Arial-Cyr", fontSize=8, leading=11))
+    styles.add(ParagraphStyle(name="CyrTitle", fontName=font, fontSize=15, leading=19, spaceAfter=15))
+    styles.add(ParagraphStyle(name="CyrCell", fontName=font, fontSize=8, leading=11))
     p = lambda v: Paragraph(escape(str(v)), styles["CyrCell"])
     data = [[p(v) for v in headers]] + [[p(v) for v in row] for row in rows]
     widths = [(landscape(A4)[0] - 60) / len(headers)] * len(headers)
