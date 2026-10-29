@@ -7,7 +7,8 @@
 __pycache__/
 *.py[cod]
 staticfiles/
-.venv/
+.venv
+.venvs/
 artifacts/
 output/
 tmp/

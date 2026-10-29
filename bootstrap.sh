@@ -20,9 +20,16 @@ if [[ -e "$INSTALL_DIR" ]]; then
             echo 'Не удалось проверить Git-репозиторий установленного проекта.' >&2
             exit 1
         fi
-        echo "Обновляю проект в $INSTALL_DIR и открываю меню обслуживания."
-        git -C "$INSTALL_DIR" pull --ff-only
-        exec bash "$INSTALL_DIR/install.sh"
+        echo "Проверяю версию установщика и открываю меню обслуживания проекта в $INSTALL_DIR."
+        if git -C "$INSTALL_DIR" fetch --no-tags origin main; then
+            installer_tmp="$(mktemp)"
+            trap 'rm -f "$installer_tmp"' EXIT
+            git -C "$INSTALL_DIR" show FETCH_HEAD:install.sh > "$installer_tmp"
+            AVT_PROJECT_ROOT="$INSTALL_DIR" bash "$installer_tmp"
+            exit $?
+        fi
+        echo 'Не удалось проверить GitHub. Открываю меню установленной версии.' >&2
+        AVT_PROJECT_ROOT="$INSTALL_DIR" exec bash "$INSTALL_DIR/install.sh"
     fi
     echo "Каталог $INSTALL_DIR уже существует и не является проектом АРСАТ." >&2
     exit 1

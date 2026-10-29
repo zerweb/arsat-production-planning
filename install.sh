@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 # Установка и обслуживание АРСАТ на Debian/Ubuntu/Astra Linux с systemd.
 # Пароли выводятся только в терминал и не записываются в отдельный файл.
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${AVT_PROJECT_ROOT:-$(dirname "${BASH_SOURCE[0]}")}" && pwd)"
 ENV_FILE="$PROJECT_ROOT/.env"
 SERVICE_NAME=avt
 APP_PORT=8001
@@ -678,15 +678,178 @@ reset_password() {
     echo 'Пароль выведен только в терминал. Сохраните его безопасным способом и смените после входа.'
 }
 
+update_failed() {
+    trap - ERR
+    set +e
+    [[ -n "${UPDATE_STAGE:-}" ]] && rm -f "$UPDATE_STAGE/source/.env"
+    echo 'Обновление прервано.' >&2
+    if [[ -n "${UPDATE_BACKUP:-}" && -f "$UPDATE_BACKUP" ]]; then
+        echo "Резервная копия базы сохранена: $UPDATE_BACKUP" >&2
+    fi
+    if [[ "${UPDATE_MIGRATIONS_STARTED:-0}" == 1 ]]; then
+        echo 'Применение миграций уже началось. Служба оставлена остановленной: проверьте ошибку и резервную копию перед восстановлением.' >&2
+    else
+        local rollback_ok=1
+        if [[ "${UPDATE_CODE_SWITCHED:-0}" == 1 ]]; then
+            if [[ "$(git rev-parse HEAD)" == "$UPDATE_TARGET" ]] && git reset --keep "$UPDATE_OLD"; then :
+            else rollback_ok=0; fi
+        fi
+        if [[ "$rollback_ok" == 1 && "${UPDATE_VENV_MOVED:-0}" == 1 ]]; then
+            if [[ -L "$PROJECT_ROOT/.venv" && "$(readlink "$PROJECT_ROOT/.venv")" == "$UPDATE_VENV_DIR" ]]; then
+                rm -f "$PROJECT_ROOT/.venv"
+            fi
+            if [[ ! -e "$PROJECT_ROOT/.venv" && ! -L "$PROJECT_ROOT/.venv" ]]; then
+                mv "$UPDATE_PREVIOUS_VENV" "$PROJECT_ROOT/.venv" || rollback_ok=0
+            else rollback_ok=0; fi
+        fi
+        if [[ "$rollback_ok" == 1 ]]; then
+            systemctl start "$SERVICE_NAME" || echo 'Не удалось запустить прежнюю службу; проверьте systemctl status avt.' >&2
+            echo 'Прежняя версия сохранена; база данных не восстанавливалась и не очищалась.' >&2
+        else
+            echo 'Автоматическое возвращение к прежней версии не удалось; служба оставлена остановленной.' >&2
+        fi
+    fi
+    exit 1
+}
+
+update_preflight_failed() {
+    trap - ERR
+    [[ -n "${UPDATE_STAGE:-}" ]] && rm -f "$UPDATE_STAGE/source/.env"
+    echo 'Проверка обновления не прошла. Работающая версия и база данных не изменены.' >&2
+    exit 1
+}
+
+update_project() {
+    [[ -f "$ENV_FILE" && -x "$PYTHON" ]] || fail 'Сначала выполните установку проекта'
+    [[ -d "$PROJECT_ROOT/.git" ]] || fail 'Каталог проекта не является Git-репозиторием'
+    command -v flock >/dev/null || fail 'Для обновления нужна команда flock'
+    prepare_runtime
+    [[ ! -L "$PROJECT_ROOT/.venvs" ]] || fail 'Каталог окружений не может быть символической ссылкой'
+    mkdir -p "$PROJECT_ROOT/.venvs"
+    chown root:root "$PROJECT_ROOT/.venvs"
+    chmod 755 "$PROJECT_ROOT/.venvs"
+    [[ ! -L "$PROJECT_ROOT/.venvs/update.lock" ]] || fail 'Недопустимый файл блокировки обновления'
+    exec 9>"$PROJECT_ROOT/.venvs/update.lock"
+    flock -n 9 || fail 'Другое обновление уже выполняется'
+    [[ "$(git branch --show-current)" == main ]] || fail 'Обновление поддерживается для ветки main'
+    [[ -z "$(git status --porcelain --untracked-files=all -- . ':(exclude).venv' ':(exclude).venvs')" ]] || fail 'В проекте есть локальные изменения или неотслеживаемые файлы; сохраните их перед обновлением'
+    git fetch --no-tags origin main
+    UPDATE_OLD="$(git rev-parse HEAD)"
+    UPDATE_TARGET="$(git rev-parse FETCH_HEAD)"
+    if [[ "$UPDATE_OLD" == "$UPDATE_TARGET" ]]; then
+        echo 'Установлена последняя версия проекта.'
+        return 0
+    fi
+    git merge-base --is-ancestor "$UPDATE_OLD" "$UPDATE_TARGET" || fail 'Ветки разошлись; автоматическое обновление остановлено'
+    printf 'Установлена версия %.12s, доступна версия %.12s.\n' "$UPDATE_OLD" "$UPDATE_TARGET"
+    echo 'Могут быть добавлены таблицы, поля и индексы; удаление или изменение существующих данных автоматически не выполняется.'
+    local answer
+    answer="$(ask 'Обновить проект с сохранением данных? (y/n)' n)"
+    [[ "$answer" =~ ^[yYnN]$ ]] || fail 'Ответьте y или n'
+    if [[ "$answer" != y && "$answer" != Y ]]; then echo 'Обновление отменено.'; return 0; fi
+    load_current_site
+    load_current_database
+    # Проверка, копия и миграции должны обращаться к одной настроенной базе.
+    export PGHOST="$DB_HOST" PGPORT="$DB_PORT" PGDATABASE="$DB_NAME" PGUSER="$DB_USER" PGPASSWORD="$DB_PASSWORD"
+    app_psql -Atqc 'SELECT 1' | grep -qx 1 || fail 'Нет подключения к действующей базе PostgreSQL'
+
+    UPDATE_STAGE="$(mktemp -d "$PROJECT_ROOT/.venvs/stage-XXXXXXXX")"
+    trap update_preflight_failed ERR
+    chmod 700 "$UPDATE_STAGE"
+    UPDATE_VENV_DIR="$(mktemp -d "$PROJECT_ROOT/.venvs/release-XXXXXXXX")"
+    chmod 755 "$UPDATE_VENV_DIR"
+    UPDATE_PREVIOUS_VENV="$UPDATE_VENV_DIR.previous"
+    mkdir "$UPDATE_STAGE/source"
+    git archive "$UPDATE_TARGET" | tar -x -C "$UPDATE_STAGE/source"
+    cp "$ENV_FILE" "$UPDATE_STAGE/source/.env"
+    chmod 600 "$UPDATE_STAGE/source/.env"
+    python3 -m venv "$UPDATE_VENV_DIR"
+    "$UPDATE_VENV_DIR/bin/python" -m pip install --disable-pip-version-check -r "$UPDATE_STAGE/source/requirements.lock.txt"
+    chmod -R a+rX "$UPDATE_VENV_DIR"
+    (cd "$UPDATE_STAGE/source" && "$UPDATE_VENV_DIR/bin/python" manage.py check --database default &&
+        "$UPDATE_VENV_DIR/bin/python" tools/check_update_migrations.py)
+    rm -f "$UPDATE_STAGE/source/.env"
+    trap - ERR
+
+    local dump_bin server_version client_version backup_temp
+    dump_bin="$(cd "$UPDATE_STAGE/source" && PG_BIN_DIR="$(env_value PG_BIN_DIR)" "$UPDATE_VENV_DIR/bin/python" -c 'from tools.pg_tools import postgres_bin; print(postgres_bin("pg_dump"))')"
+    server_version="$(app_psql -Atqc 'SHOW server_version_num')"
+    client_version="$("$dump_bin" --version 2>/dev/null | sed -nE 's/.* ([0-9]+)(\.[0-9]+)?.*/\1/p' || true)"
+    [[ "$server_version" =~ ^[0-9]+$ ]] || fail 'Не удалось определить версию сервера PostgreSQL'
+    if [[ ! "$client_version" =~ ^[0-9]+$ ]] || (( 10#$client_version < 10#$server_version / 10000 )); then
+        local major=$((10#$server_version / 10000))
+        echo "Устанавливаю клиент PostgreSQL $major для резервного копирования."
+        export DEBIAN_FRONTEND=noninteractive
+        if apt-get update && apt-cache show "postgresql-client-$major" >/dev/null 2>&1 && apt-get install -y "postgresql-client-$major"; then
+            dump_bin="$(cd "$UPDATE_STAGE/source" && PG_BIN_DIR="$(env_value PG_BIN_DIR)" "$UPDATE_VENV_DIR/bin/python" -c 'from tools.pg_tools import postgres_bin; print(postgres_bin("pg_dump"))')"
+            client_version="$("$dump_bin" --version 2>/dev/null | sed -nE 's/.* ([0-9]+)(\.[0-9]+)?.*/\1/p' || true)"
+        fi
+    fi
+    [[ "$server_version" =~ ^[0-9]+$ && "$client_version" =~ ^[0-9]+$ ]] &&
+        (( 10#$client_version >= 10#$server_version / 10000 )) ||
+        fail 'Для резервной копии установите клиент PostgreSQL версии сервера или новее и проверьте PG_BIN_DIR в .env'
+    [[ -z "$(git status --porcelain --untracked-files=all -- . ':(exclude).venv' ':(exclude).venvs')" ]] || fail 'Во время подготовки появились локальные изменения; обновление остановлено'
+    UPDATE_MIGRATIONS_STARTED=0; UPDATE_CODE_SWITCHED=0; UPDATE_VENV_MOVED=0; UPDATE_BACKUP=''
+    trap update_failed ERR
+    systemctl stop "$SERVICE_NAME"
+    cp "$ENV_FILE" "$UPDATE_STAGE/source/.env"
+    chmod 600 "$UPDATE_STAGE/source/.env"
+    (cd "$UPDATE_STAGE/source" && "$UPDATE_VENV_DIR/bin/python" tools/check_update_migrations.py)
+    rm -f "$UPDATE_STAGE/source/.env"
+    backup_temp="$(mktemp "$UPDATE_STAGE/backup-XXXXXXXX")"
+    if ! PGPASSWORD="$DB_PASSWORD" PGCONNECT_TIMEOUT=5 "$dump_bin" --format=custom --no-owner --no-privileges \
+        --host "$DB_HOST" --port "$DB_PORT" --username "$DB_USER" --dbname "$DB_NAME" --file "$backup_temp"; then
+        rm -f "$backup_temp"
+        echo 'Не удалось создать резервную копию перед обновлением.' >&2
+        update_failed
+    fi
+    if [[ ! -s "$backup_temp" ]]; then
+        rm -f "$backup_temp"
+        echo 'Резервная копия пуста.' >&2
+        update_failed
+    fi
+    UPDATE_BACKUP="$PROJECT_ROOT/.backups/backup-$(date +%Y%m%d-%H%M%S)-$(python3 -c 'import secrets; print(secrets.token_hex(4))').dump"
+    chmod 600 "$backup_temp"
+    chown www-data:www-data "$backup_temp"
+    mv "$backup_temp" "$UPDATE_BACKUP"
+    git merge --ff-only "$UPDATE_TARGET"
+    UPDATE_CODE_SWITCHED=1
+    mv "$PROJECT_ROOT/.venv" "$UPDATE_PREVIOUS_VENV"
+    UPDATE_VENV_MOVED=1
+    ln -s "$UPDATE_VENV_DIR" "$PROJECT_ROOT/.venv"
+    UPDATE_MIGRATIONS_STARTED=1
+    "$PYTHON" manage.py migrate --noinput
+    "$PYTHON" manage.py check --database default
+    "$PYTHON" manage.py collectstatic --noinput --verbosity 0
+    systemctl start "$SERVICE_NAME"
+    health_check
+    trap - ERR
+    rm -rf -- "$UPDATE_STAGE/source" || echo 'Не удалось убрать временную копию исходного кода.' >&2
+    rmdir "$UPDATE_STAGE" 2>/dev/null || true
+    printf 'Проект обновлён до %.12s. Данные и параметры подключения сохранены.\n' "$UPDATE_TARGET"
+    printf 'Резервная копия до обновления: %s\n' "$UPDATE_BACKUP"
+}
+
+if [[ "${1:-}" == --update && "${AVT_UPDATE_REEXEC:-0}" == 1 ]]; then
+    update_project
+    exit $?
+fi
 echo 'АРСАТ — установка и обслуживание'
 echo '1 — новая установка'
 echo '2 — изменить настройки сайта или PostgreSQL'
 echo '3 — сбросить пароль пользователя (включая admin)'
+echo '4 — проверить и установить обновление проекта'
 if [[ -f "$ENV_FILE" ]]; then default_action=2; else default_action=1; fi
 ACTION="$(ask 'Выберите действие' "$default_action")"
 case "$ACTION" in
     1) install_new ;;
     2) modify_settings ;;
     3) reset_password ;;
-    *) fail 'Выберите 1, 2 или 3' ;;
+    4)
+        update_script="$(mktemp)"
+        trap 'rm -f "$update_script"' EXIT
+        cp "${BASH_SOURCE[0]}" "$update_script"
+        AVT_UPDATE_REEXEC=1 AVT_PROJECT_ROOT="$PROJECT_ROOT" bash "$update_script" --update
+        ;;
+    *) fail 'Выберите 1, 2, 3 или 4' ;;
 esac

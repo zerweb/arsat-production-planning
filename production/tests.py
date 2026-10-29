@@ -20,9 +20,20 @@ from . import db_admin
 from .forms import REGISTRY, UserForm, form_for
 from .estd import route_card_data, render_route_card
 from tools import pg_tools
+from tools.check_update_migrations import unsupported_operations
+from django.db import migrations, models as django_models
 
 
 class PostgreSQLClientSelectionTests(SimpleTestCase):
+    def test_update_allows_additions_and_blocks_data_or_schema_removal(self):
+        additive = SimpleNamespace(app_label='production', name='addition', operations=[
+            migrations.AddField('orderitem', 'example', django_models.CharField(max_length=20, default=''))])
+        destructive = SimpleNamespace(app_label='production', name='dangerous', operations=[
+            migrations.RemoveField('orderitem', 'example'), migrations.RunSQL('DELETE FROM production_order')])
+        self.assertEqual(unsupported_operations([(additive, False)]), [])
+        self.assertEqual(len(unsupported_operations([(destructive, False)])), 2)
+        self.assertEqual(len(unsupported_operations([(additive, True)])), 1)
+
     def test_selects_newest_installed_client(self):
         with tempfile.TemporaryDirectory() as directory:
             old = Path(directory) / '15' / 'pg_dump'
