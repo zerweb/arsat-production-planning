@@ -9,6 +9,7 @@ SERVICE_NAME=avt
 APP_PORT=8001
 SERVICE_FILE="/etc/systemd/system/$SERVICE_NAME.service"
 NGINX_FILE="/etc/nginx/sites-available/$SERVICE_NAME.conf"
+ACME_WEBROOT=/var/lib/letsencrypt/avt
 PYTHON="$PROJECT_ROOT/.venv/bin/python"
 CREDENTIAL_LINES=''
 DB_PASSWORD_CREATED=0
@@ -30,6 +31,26 @@ random_password() { python3 -c 'import secrets; print(secrets.token_urlsafe(32))
 valid_port() { [[ "$1" =~ ^[0-9]+$ ]] && (( 10#$1 >= 1 && 10#$1 <= 65535 )); }
 valid_name() { [[ "$1" =~ ^[a-z_][a-z0-9_]{0,62}$ ]]; }
 valid_host() { [[ "$1" =~ ^[A-Za-z0-9.:-]+$ ]]; }
+valid_domain() {
+    python3 - "$1" <<'PY'
+import ipaddress
+import re
+import sys
+
+value = sys.argv[1]
+try:
+    ipaddress.ip_address(value)
+except ValueError:
+    pass
+else:
+    sys.exit(1)
+labels = value.split('.')
+sys.exit(0 if len(value) <= 253 and len(labels) >= 2 and all(
+    re.fullmatch(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?', label)
+    for label in labels
+) and re.fullmatch(r'(?:[A-Za-z]{2,}|xn--[A-Za-z0-9-]{2,59})', labels[-1], re.IGNORECASE) else 1)
+PY
+}
 env_value() {
     local wanted="$1" key value
     [[ -f "$ENV_FILE" ]] || return 0
@@ -53,21 +74,26 @@ umask 077
 cd "$PROJECT_ROOT"
 
 choose_site() {
-    local default_ip current_host current_port current_mode
+    local default_ip current_host current_port current_mode current_email
     default_ip="$(server_ip)"
     current_host="$(env_value AVT_SITE_HOST)"
     current_port="$(env_value AVT_SITE_PORT)"
     current_mode="$(env_value AVT_ACCESS_MODE)"
-    SITE_PORT="$(ask 'Порт веб-сайта' "${current_port:-8080}")"
-    valid_port "$SITE_PORT" && [[ "$SITE_PORT" != "$APP_PORT" ]] || fail 'Недопустимый порт сайта'
-    echo 'Доступ: 1 — HTTP по IP в сети; 2 — HTTPS по сети; 3 — HTTP только на сервере'
+    current_email="$(env_value AVT_ACME_EMAIL)"
+    echo 'Доступ: 1 — HTTP в сети; 2 — HTTPS с готовым сертификатом; 3 — HTTP только на сервере; 4 — домен и автоматический сертификат Let’s Encrypt'
     ACCESS_MODE="$(ask 'Выберите режим' "${current_mode:-1}")"
     case "$ACCESS_MODE" in
         1) LISTEN_ADDRESS=0.0.0.0; USE_HTTPS=0; echo 'HTTP передаёт пароли без шифрования. Используйте только доверенную сеть.' ;;
         2) LISTEN_ADDRESS=0.0.0.0; USE_HTTPS=1 ;;
         3) LISTEN_ADDRESS=127.0.0.1; USE_HTTPS=0 ;;
-        *) fail 'Выберите 1, 2 или 3' ;;
+        4) LISTEN_ADDRESS=0.0.0.0; USE_HTTPS=1 ;;
+        *) fail 'Выберите 1, 2, 3 или 4' ;;
     esac
+    if [[ "$ACCESS_MODE" == 4 ]]; then SITE_PORT=443
+    else
+        SITE_PORT="$(ask 'Порт веб-сайта' "${current_port:-8080}")"
+        valid_port "$SITE_PORT" && [[ "$SITE_PORT" != "$APP_PORT" ]] || fail 'Недопустимый порт сайта'
+    fi
     if [[ "$ACCESS_MODE" == 3 ]]; then
         SITE_HOST=127.0.0.1
     else
@@ -75,14 +101,24 @@ choose_site() {
         valid_host "$SITE_HOST" && [[ "$SITE_HOST" != 127.0.0.1 && "$SITE_HOST" != localhost ]] ||
             fail 'Для сетевого доступа укажите IP сервера или домен'
     fi
-    TLS_CERT=''; TLS_KEY=''
+    TLS_CERT=''; TLS_KEY=''; ACME_EMAIL=''
     if [[ "$ACCESS_MODE" == 2 ]]; then
         TLS_CERT="$(ask 'Абсолютный путь к TLS-сертификату' "$(env_value AVT_TLS_CERT)")"
         TLS_KEY="$(ask 'Абсолютный путь к TLS-ключу' "$(env_value AVT_TLS_KEY)")"
         [[ "$TLS_CERT" =~ ^/[A-Za-z0-9/_+.,-]+$ && -r "$TLS_CERT" ]] || fail 'TLS-сертификат недоступен'
         [[ "$TLS_KEY" =~ ^/[A-Za-z0-9/_+.,-]+$ && -r "$TLS_KEY" ]] || fail 'TLS-ключ недоступен'
     fi
-    if [[ "$USE_HTTPS" == 1 ]]; then CSRF_ORIGIN="https://$SITE_HOST:$SITE_PORT"
+    if [[ "$ACCESS_MODE" == 4 ]]; then
+        valid_domain "$SITE_HOST" || fail 'Для Let’s Encrypt нужен обычный DNS-домен или поддомен, а не IP-адрес'
+        ACME_EMAIL="$(ask 'Email для уведомлений Let’s Encrypt' "$current_email")"
+        [[ "$ACME_EMAIL" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]] || fail 'Неверный email для Let’s Encrypt'
+        TLS_CERT="/etc/letsencrypt/live/$SITE_HOST/fullchain.pem"
+        TLS_KEY="/etc/letsencrypt/live/$SITE_HOST/privkey.pem"
+        echo 'Для выпуска сертификата домен должен указывать на этот сервер, а входящий TCP/80 — быть доступен из интернета.'
+    fi
+    if [[ "$USE_HTTPS" == 1 && "$SITE_PORT" == 443 ]]; then CSRF_ORIGIN="https://$SITE_HOST"
+    elif [[ "$USE_HTTPS" == 1 ]]; then CSRF_ORIGIN="https://$SITE_HOST:$SITE_PORT"
+    elif [[ "$SITE_PORT" == 80 ]]; then CSRF_ORIGIN="http://$SITE_HOST"
     else CSRF_ORIGIN="http://$SITE_HOST:$SITE_PORT"; fi
 }
 
@@ -91,8 +127,16 @@ load_current_site() {
     SITE_PORT="$(env_value AVT_SITE_PORT)"; SITE_PORT="${SITE_PORT:-8080}"
     ACCESS_MODE="$(env_value AVT_ACCESS_MODE)"; ACCESS_MODE="${ACCESS_MODE:-3}"
     TLS_CERT="$(env_value AVT_TLS_CERT)"; TLS_KEY="$(env_value AVT_TLS_KEY)"
-    if [[ "$ACCESS_MODE" == 2 ]]; then USE_HTTPS=1; CSRF_ORIGIN="https://$SITE_HOST:$SITE_PORT"
-    else USE_HTTPS=0; CSRF_ORIGIN="http://$SITE_HOST:$SITE_PORT"; fi
+    ACME_EMAIL="$(env_value AVT_ACME_EMAIL)"
+    if [[ "$ACCESS_MODE" == 2 || "$ACCESS_MODE" == 4 ]]; then
+        USE_HTTPS=1
+        if [[ "$SITE_PORT" == 443 ]]; then CSRF_ORIGIN="https://$SITE_HOST"
+        else CSRF_ORIGIN="https://$SITE_HOST:$SITE_PORT"; fi
+    else
+        USE_HTTPS=0
+        if [[ "$SITE_PORT" == 80 ]]; then CSRF_ORIGIN="http://$SITE_HOST"
+        else CSRF_ORIGIN="http://$SITE_HOST:$SITE_PORT"; fi
+    fi
     if [[ "$ACCESS_MODE" == 3 ]]; then LISTEN_ADDRESS=127.0.0.1
     else LISTEN_ADDRESS=0.0.0.0; fi
 }
@@ -123,27 +167,53 @@ admin_psql() {
     PGPASSWORD="$DB_ADMIN_PASSWORD" PGCONNECT_TIMEOUT=5 psql -X -w --host "$DB_HOST" --port "$DB_PORT" \
         --username "$DB_ADMIN_USER" --dbname postgres -v ON_ERROR_STOP=1 "$@"
 }
+setup_local_postgres() {
+    echo 'Устанавливаю PostgreSQL на этом сервере.'
+    apt-get update
+    apt-get install -y postgresql
+    systemctl enable --now postgresql
+    pg_isready -h 127.0.0.1 -p 5432 >/dev/null || fail 'Локальный PostgreSQL не слушает 127.0.0.1:5432'
+    local role_exists database_exists
+    role_exists="$(runuser -u postgres -- psql -X -Atqc "SELECT 1 FROM pg_roles WHERE rolname='$DB_USER'")"
+    database_exists="$(runuser -u postgres -- psql -X -Atqc "SELECT 1 FROM pg_database WHERE datname='$DB_NAME'")"
+    [[ -z "$role_exists" && -z "$database_exists" ]] || fail 'Локальная роль или база уже существует; выберите подключение к готовой БД'
+    DB_PASSWORD="$(random_password)"
+    # Роль и база создаются через локальное системное подключение postgres.
+    printf 'CREATE ROLE "%s" LOGIN PASSWORD '\''%s'\'';\n' "$DB_USER" "$DB_PASSWORD" |
+        runuser -u postgres -- psql -X -v ON_ERROR_STOP=1 -q -f -
+    if ! runuser -u postgres -- createdb --owner="$DB_USER" "$DB_NAME"; then
+        printf 'DROP ROLE "%s";\n' "$DB_USER" | runuser -u postgres -- psql -X -v ON_ERROR_STOP=1 -q -f - || true
+        fail 'Не удалось создать локальную базу PostgreSQL'
+    fi
+    DB_PASSWORD_CREATED=1
+}
 choose_database() {
     local default_host default_port default_name default_user default_mode role_exists database_exists
     default_host="$(env_value PGHOST)"; default_port="$(env_value PGPORT)"
-    echo 'PostgreSQL: 1 — создать БД на готовом сервере; 2 — подключить готовую БД'
+    echo 'PostgreSQL: 1 — создать БД на готовом сервере; 2 — подключить готовую БД; 3 — установить PostgreSQL и создать БД на этом сервере'
     if [[ -f "$ENV_FILE" ]]; then default_mode=2; else default_mode=1; fi
     DB_MODE="$(ask 'Выберите режим' "$default_mode")"
-    [[ "$DB_MODE" == 1 || "$DB_MODE" == 2 ]] || fail 'Выберите 1 или 2'
-    if [[ "$DB_MODE" == 1 ]]; then
+    [[ "$DB_MODE" =~ ^[123]$ ]] || fail 'Выберите 1, 2 или 3'
+    if [[ "$DB_MODE" == 1 || "$DB_MODE" == 3 ]]; then
         default_name=avt_production; default_user=avt_app
     else
         default_name="$(env_value PGDATABASE)"; default_name="${default_name:-avt_production}"
         default_user="$(env_value PGUSER)"; default_user="${default_user:-avt_app}"
         echo 'В квадратных скобках показаны текущие значения. Enter оставляет их без изменений.'
     fi
-    DB_HOST="$(ask 'Адрес работающего сервера PostgreSQL' "${default_host:-127.0.0.1}")"
-    DB_PORT="$(ask 'Порт PostgreSQL' "${default_port:-5432}")"
+    if [[ "$DB_MODE" == 3 ]]; then
+        DB_HOST=127.0.0.1; DB_PORT=5432
+    else
+        DB_HOST="$(ask 'Адрес работающего сервера PostgreSQL' "${default_host:-127.0.0.1}")"
+        DB_PORT="$(ask 'Порт PostgreSQL' "${default_port:-5432}")"
+    fi
     valid_host "$DB_HOST" && valid_port "$DB_PORT" || fail 'Неверный адрес или порт PostgreSQL'
     DB_NAME="$(ask 'Название базы' "$default_name")"
     DB_USER="$(ask 'Пользователь приложения в PostgreSQL' "$default_user")"
     valid_name "$DB_NAME" && valid_name "$DB_USER" || fail 'Имя БД и пользователя: строчные латинские буквы, цифры, _'
-    if [[ "$DB_MODE" == 1 ]]; then
+    if [[ "$DB_MODE" == 3 ]]; then
+        setup_local_postgres
+    elif [[ "$DB_MODE" == 1 ]]; then
         DB_ADMIN_USER="$(ask 'Администратор готового PostgreSQL-сервера' postgres)"
         valid_name "$DB_ADMIN_USER" || fail 'Неверное имя администратора PostgreSQL'
         DB_ADMIN_PASSWORD="$(secret 'Пароль администратора PostgreSQL')"
@@ -178,7 +248,7 @@ write_env() {
     if [[ -f "$ENV_FILE" ]]; then
         while IFS='=' read -r key value; do
             case "$key" in
-                PGHOST|PGPORT|PGDATABASE|PGUSER|PGPASSWORD|DJANGO_SECRET_KEY|DJANGO_ALLOWED_HOSTS|DJANGO_CSRF_TRUSTED_ORIGINS|DJANGO_USE_HTTPS|DJANGO_DEBUG|AVT_SITE_HOST|AVT_SITE_PORT|AVT_ACCESS_MODE|AVT_TLS_CERT|AVT_TLS_KEY) ;;
+                PGHOST|PGPORT|PGDATABASE|PGUSER|PGPASSWORD|DJANGO_SECRET_KEY|DJANGO_ALLOWED_HOSTS|DJANGO_CSRF_TRUSTED_ORIGINS|DJANGO_USE_HTTPS|DJANGO_DEBUG|AVT_SITE_HOST|AVT_SITE_PORT|AVT_ACCESS_MODE|AVT_TLS_CERT|AVT_TLS_KEY|AVT_ACME_EMAIL) ;;
                 *) printf '%s=%s\n' "$key" "$value" >> "$temp" ;;
             esac
         done < "$ENV_FILE"
@@ -201,6 +271,7 @@ AVT_SITE_PORT=$SITE_PORT
 AVT_ACCESS_MODE=$ACCESS_MODE
 AVT_TLS_CERT=$TLS_CERT
 AVT_TLS_KEY=$TLS_KEY
+AVT_ACME_EMAIL=$ACME_EMAIL
 ENV
     chown www-data:www-data "$temp"
     chmod 600 "$temp"
@@ -235,6 +306,21 @@ SERVICE
 write_nginx() {
     local listen tls_lines temp
     temp="$(mktemp "/etc/nginx/sites-available/.avt-tmp.XXXXXX")"
+    : > "$temp"
+    if [[ "$ACCESS_MODE" == 4 ]]; then
+        # Порт 80 оставляем для проверки домена и перенаправления на HTTPS.
+        cat >> "$temp" <<NGINX
+server {
+    listen 0.0.0.0:80;
+    server_name $SITE_HOST;
+    location ^~ /.well-known/acme-challenge/ {
+        root $ACME_WEBROOT;
+        try_files \$uri =404;
+    }
+    location / { return 308 https://$SITE_HOST\$request_uri; }
+}
+NGINX
+    fi
     if [[ "$USE_HTTPS" == 1 ]]; then
         listen="listen $LISTEN_ADDRESS:$SITE_PORT ssl;"
         tls_lines="    ssl_certificate $TLS_CERT;
@@ -243,7 +329,8 @@ write_nginx() {
         listen="listen $LISTEN_ADDRESS:$SITE_PORT;"
         tls_lines=''
     fi
-    cat > "$temp" <<NGINX
+    if [[ "$ACCESS_MODE" != 4 || ( -r "$TLS_CERT" && -r "$TLS_KEY" ) ]]; then
+    cat >> "$temp" <<NGINX
 server {
     $listen
 $tls_lines
@@ -267,10 +354,58 @@ $tls_lines
     }
 }
 NGINX
+    fi
     chmod 644 "$temp"
     mv -f "$temp" "$NGINX_FILE"
     ln -sfn "$NGINX_FILE" "/etc/nginx/sites-enabled/$SERVICE_NAME.conf"
     nginx -t
+}
+
+issue_certificate() {
+    [[ "$ACCESS_MODE" == 4 ]] || return 0
+    install -d -m 755 "$ACME_WEBROOT/.well-known/acme-challenge"
+    if ! certbot certonly --webroot --webroot-path "$ACME_WEBROOT" \
+        --non-interactive --agree-tos --email "$ACME_EMAIL" \
+        --cert-name "$SITE_HOST" -d "$SITE_HOST"; then
+        echo 'Let’s Encrypt не смог подтвердить домен. Проверьте DNS и входящий TCP/80, затем повторите настройку.' >&2
+        return 1
+    fi
+    if [[ ! -r "$TLS_CERT" || ! -r "$TLS_KEY" ]]; then
+        echo 'Выданный сертификат не найден.' >&2
+        return 1
+    fi
+    install -d -m 755 /etc/letsencrypt/renewal-hooks/deploy
+    cat > /etc/letsencrypt/renewal-hooks/deploy/avt-reload-nginx <<'HOOK'
+#!/bin/sh
+systemctl reload nginx
+HOOK
+    chmod 755 /etc/letsencrypt/renewal-hooks/deploy/avt-reload-nginx
+    if systemctl list-unit-files certbot.timer --no-legend 2>/dev/null | grep -q '^certbot.timer'; then
+        systemctl enable --now certbot.timer
+    else
+        cat > /etc/systemd/system/avt-cert-renew.service <<'SERVICE'
+[Unit]
+Description=Renew Let's Encrypt certificates for ARSAT
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/certbot renew --quiet
+SERVICE
+        cat > /etc/systemd/system/avt-cert-renew.timer <<'TIMER'
+[Unit]
+Description=Check ARSAT certificates twice daily
+
+[Timer]
+OnCalendar=*-*-* 03,15:00:00
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+TIMER
+        systemctl daemon-reload
+        systemctl enable --now avt-cert-renew.timer
+    fi
 }
 
 prepare_runtime() {
@@ -323,8 +458,10 @@ open_host_firewall() {
     [[ "$ACCESS_MODE" != 3 ]] || return 0
     if command -v ufw >/dev/null && ufw status | grep -q '^Status: active'; then
         ufw allow "$SITE_PORT/tcp"
+        if [[ "$ACCESS_MODE" == 4 ]]; then ufw allow 80/tcp; fi
     elif command -v firewall-cmd >/dev/null && firewall-cmd --state >/dev/null 2>&1; then
         firewall-cmd --permanent --add-port="$SITE_PORT/tcp"
+        if [[ "$ACCESS_MODE" == 4 ]]; then firewall-cmd --permanent --add-port=80/tcp; fi
         firewall-cmd --reload
     fi
 }
@@ -333,7 +470,9 @@ health_check() {
     local attempt response
     for attempt in {1..20}; do
         if [[ "$USE_HTTPS" == 1 ]]; then
-            response="$(curl -kfsS --noproxy '*' --max-time 5 --resolve "$SITE_HOST:$SITE_PORT:127.0.0.1" \
+            local -a tls_options=()
+            if [[ "$ACCESS_MODE" != 4 ]]; then tls_options=(-k); fi
+            response="$(curl "${tls_options[@]}" -fsS --noproxy '*' --max-time 5 --resolve "$SITE_HOST:$SITE_PORT:127.0.0.1" \
                 "https://$SITE_HOST:$SITE_PORT/health/ready/" 2>/dev/null || true)"
         else
             response="$(curl -fsS --noproxy '*' --max-time 5 -H "Host: $SITE_HOST" \
@@ -347,7 +486,8 @@ health_check() {
 }
 
 show_result() {
-    if [[ "$USE_HTTPS" == 1 ]]; then printf 'Сайт: https://%s:%s/\n' "$SITE_HOST" "$SITE_PORT"
+    if [[ "$ACCESS_MODE" == 4 ]]; then printf 'Сайт: https://%s/\n' "$SITE_HOST"
+    elif [[ "$USE_HTTPS" == 1 ]]; then printf 'Сайт: https://%s:%s/\n' "$SITE_HOST" "$SITE_PORT"
     else printf 'Сайт: http://%s:%s/\n' "$SITE_HOST" "$SITE_PORT"; fi
     if [[ "$ACCESS_MODE" != 3 ]]; then
         echo 'Если доступ с другого компьютера отсутствует, откройте этот порт также во внешнем сетевом экране (например, Azure NSG).'
@@ -366,12 +506,28 @@ show_result() {
     echo 'Служба: sudo systemctl status avt; повторный запуск меню: sudo bash /opt/avt/install.sh'
 }
 
+installation_failed() {
+    trap - ERR
+    echo 'Установка прервана. После устранения ошибки повторите запуск sudo bash /opt/avt/install.sh.' >&2
+    if [[ -f "$ENV_FILE" ]]; then echo 'Выберите изменение настроек, чтобы завершить установку.' >&2; fi
+    if [[ "$DB_PASSWORD_CREATED" == 1 ]]; then
+        printf 'Созданная БД: host=%s port=%s database=%s user=%s password=%s\n' \
+            "$DB_HOST" "$DB_PORT" "$DB_NAME" "$DB_USER" "$DB_PASSWORD" >&2
+    fi
+    if [[ -n "$CREDENTIAL_LINES" ]]; then
+        printf 'Созданные пароли приложения (сохраните их):\n%s' "$CREDENTIAL_LINES" >&2
+    fi
+    exit 1
+}
+
 install_new() {
     [[ ! -e "$ENV_FILE" ]] || fail 'Установка уже есть. Выберите изменение настроек.'
     choose_site
+    trap installation_failed ERR
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
     apt-get install -y python3 python3-venv python3-dev libpq-dev postgresql-client nginx curl
+    if [[ "$ACCESS_MODE" == 4 ]]; then apt-get install -y certbot; fi
     choose_database
     IMPORT_SAMPLE="$(ask 'Импортировать тестовые данные? (y/n)' n)"
     [[ "$IMPORT_SAMPLE" =~ ^[yYnN]$ ]] || fail 'Ответьте y или n'
@@ -386,7 +542,13 @@ install_new() {
     systemctl enable --now nginx
     systemctl reload nginx
     open_host_firewall
+    if [[ "$ACCESS_MODE" == 4 ]]; then
+        issue_certificate
+        write_nginx
+        systemctl reload nginx
+    fi
     health_check
+    trap - ERR
     show_result
 }
 
@@ -427,7 +589,10 @@ modify_settings() {
     local scope
     scope="$(ask 'Выберите настройки' 1)"
     [[ "$scope" =~ ^[123]$ ]] || fail 'Выберите 1, 2 или 3'
-    if [[ "$scope" == 1 || "$scope" == 3 ]]; then choose_site; fi
+    if [[ "$scope" == 1 || "$scope" == 3 ]]; then
+        choose_site
+        if [[ "$ACCESS_MODE" == 4 ]]; then apt-get update; apt-get install -y certbot; fi
+    fi
     IMPORT_SAMPLE=n
     if [[ "$scope" == 2 || "$scope" == 3 ]]; then
         choose_database
@@ -452,6 +617,11 @@ modify_settings() {
     systemctl enable --now nginx
     systemctl reload nginx
     open_host_firewall
+    if [[ "$ACCESS_MODE" == 4 && ( "$scope" != 2 || ! -r "$TLS_CERT" || ! -r "$TLS_KEY" ) ]]; then
+        issue_certificate
+        write_nginx
+        systemctl reload nginx
+    fi
     health_check || rollback_settings
     trap - ERR
     rm -f "$BACKUP_ENV" "$BACKUP_NGINX"
