@@ -112,6 +112,9 @@ const pageViews = {
               <tr><td><b>Инженер-технолог</b></td><td>10</td><td>Проектирование технологических процессов, справочники, документы ЕСТД и материалы.</td></tr>
               <tr><td><b>Инженер по нормированию труда</b></td><td>2</td><td>Расчёт норм времени, режимов обработки, укрупнённых нормативов и профильные отчёты.</td></tr>
               <tr><td><b>Администратор системы</b></td><td>—</td><td>Полный доступ, пользователи, роли и параметры подключения к серверу PostgreSQL.</td></tr>
+              <tr><td><b>Планировщик</b></td><td>—</td><td>Планы, производственные данные и отчёты.</td></tr>
+              <tr><td><b>Начальник участка</b></td><td>—</td><td>Контроль производства и персонала.</td></tr>
+              <tr><td><b>Экономист</b></td><td>—</td><td>Просмотр нормирования, табеля и отчётов.</td></tr>
             </tbody>
           </table>
         </div>
@@ -138,17 +141,15 @@ const pageViews = {
         <label class="form-modal-field required"><span>Логин</span><input name="username" required></label>
         <label class="form-modal-field required"><span>ФИО сотрудника</span><input name="fullName" required></label>
         <label class="form-modal-field required"><span>Пароль</span><input name="password" type="password" required></label>
-        <label class="form-modal-field required"><span>Роль</span><select name="role" required><option value="technologist">Инженер-технолог</option><option value="normalizer">Инженер по нормированию труда</option><option value="manager">Начальник отдела</option><option value="admin">Администратор системы</option></select></label>
+        <label class="form-modal-field required"><span>Роль</span><select name="role" required><option value="technologist">Инженер-технолог</option><option value="normalizer">Инженер по нормированию труда</option><option value="manager">Начальник отдела</option><option value="planner">Планировщик</option><option value="supervisor">Начальник участка</option><option value="economist">Экономист</option><option value="admin">Администратор системы</option></select></label>
         <label class="form-modal-field"><span><input name="isActive" type="checkbox" checked> Учётная запись активна</span></label>
-        <label class="form-modal-field"><span><input name="canChangeUsername" type="checkbox"> Разрешить менять логин</span></label>
-        <label class="form-modal-field"><span><input name="canChangePassword" type="checkbox"> Разрешить менять пароль</span></label>
       </div>
       <footer><button type="button" class="ghost-button" data-dialog-close="user-dialog">Отмена</button><button class="primary-button" type="submit">Сохранить</button></footer>
     </form>
   </dialog>
   <dialog id="server-dialog" class="form-modal">
     <form id="server-form" method="dialog" class="form-modal-body">
-      <header><div><span class="eyebrow">Подключение</span><h2>Параметры сервера PostgreSQL</h2></div><button type="button" class="modal-close" data-dialog-close="server-dialog" aria-label="Закрыть">×</button></header>
+      <header><div><h2>Параметры сервера PostgreSQL</h2></div></header>
       <div class="form-modal-grid">
         <label class="form-modal-field required"><span>Адрес сервера</span><input name="host" required></label>
         <label class="form-modal-field required"><span>Порт</span><input name="port" required></label>
@@ -3339,8 +3340,6 @@ function openUserDialog(username = '') {
   form.elements.password.value = user?.password || '';
   form.elements.role.value = user?.role || 'technologist';
   form.elements.isActive.checked = user ? user.isActive : true;
-  form.elements.canChangeUsername.checked = !!user?.canChangeUsername;
-  form.elements.canChangePassword.checked = !!user?.canChangePassword;
   form.elements.username.readOnly = user?.username === 'admin';
   dialog.showModal();
 }

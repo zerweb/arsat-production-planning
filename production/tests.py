@@ -206,7 +206,7 @@ class WorkflowTests(TestCase):
     def test_placeholder_account_needs_individual_password_to_activate(self):
         user = User.objects.get(username="normalizer_01")
         response = self.client.put(f"/api/admin/users/{user.pk}/", data=json.dumps({
-            "username": user.username, "fullName": "Инженер Нормирования", "role": "normalizer",
+            "username": user.username, "fullName": "Инженер Нормирования", "role": "normalizer", "isActive": True,
         }), content_type="application/json")
         self.assertEqual(response.status_code, 400)
         user.refresh_from_db()
@@ -1207,8 +1207,7 @@ class WorkflowTests(TestCase):
         self.client.force_login(user)
         response = self.client.post("/api/profile/", {"username": "changed", "current_password": "user"})
         self.assertEqual(response.status_code, 403)
-        profile = m.UserProfile.objects.get(user=user)
-        profile.can_change_username = True; profile.can_change_password = True; profile.save()
+        m.SitePolicy.objects.update_or_create(pk=1, defaults={"allow_username_changes": True, "allow_password_changes": True})
         response = self.client.post("/api/profile/", {"username": "changed", "current_password": "wrong"})
         self.assertEqual(response.status_code, 400)
         response = self.client.post("/api/profile/", {"username": "changed", "email": "user@example.org", "current_password": "user", "new_password": "Very-long-unique-pass-987!"})
@@ -1216,6 +1215,28 @@ class WorkflowTests(TestCase):
         user.refresh_from_db()
         self.assertTrue(user.check_password("Very-long-unique-pass-987!"))
         self.assertEqual(self.client.get("/api/profile/").status_code, 200)
+
+    def test_global_profile_permissions_apply_to_existing_and_new_users(self):
+        response = self.client.put("/api/admin/policy/", data=json.dumps({"allowUsernameChanges": True, "allowPasswordChanges": True}), content_type="application/json")
+        self.assertEqual(response.status_code, 200)
+        user = User.objects.get(username="user")
+        self.client.force_login(user)
+        permissions = self.client.get("/api/profile/").json()
+        self.assertTrue(permissions["canChangeUsername"])
+        self.assertTrue(permissions["canChangePassword"])
+        self.assertEqual(self.client.put("/api/admin/policy/", data=json.dumps({"allowUsernameChanges": False}), content_type="application/json").status_code, 403)
+
+    def test_legacy_assets_are_versioned(self):
+        response = self.client.get("/index.html")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "/static/production/bridge/server-bridge.js?v=")
+        self.assertContains(response, "/static/production/legacy/js/app.js?v=")
+
+    def test_corrupt_sample_name_has_safe_display_fallback(self):
+        from .legacy_ui import display_user_name
+        user = User(username="technologist_02", first_name="???????-????????", last_name="02")
+        self.assertEqual(display_user_name(user), "Инженер-технолог 02")
+        self.assertEqual(user.first_name, "???????-????????")
 
     def test_maintenance_blocks_existing_session_and_other_logins(self):
         other = Client(HTTP_HOST="127.0.0.1")

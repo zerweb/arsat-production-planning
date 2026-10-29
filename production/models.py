@@ -19,6 +19,8 @@ class UserProfile(models.Model):
 class SitePolicy(models.Model):
     maintenance = models.BooleanField(default=False)
     maintenance_owner = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
+    allow_username_changes = models.BooleanField(default=False)
+    allow_password_changes = models.BooleanField(default=False)
 
 
 class NamedModel(models.Model):

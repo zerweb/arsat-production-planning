@@ -609,9 +609,9 @@ async function loadDatabaseStatus() {
     document.querySelectorAll('[data-server-value]').forEach(node => { node.textContent = data[node.dataset.serverValue] || ''; });
     const form = document.querySelector('#server-form');
     if (form) for (const name of ['host', 'port', 'database', 'username']) form.elements[name].value = data[name] || '';
-    if (badge) { badge.textContent = 'Подключено'; badge.classList.add('success'); }
+    if (badge) { badge.textContent = 'Подключено'; badge.title = 'База данных доступна'; badge.classList.add('success'); }
   } catch (error) {
-    if (badge) badge.textContent = 'Нет подключения';
+    if (badge) { badge.textContent = 'Нет подключения'; badge.title = 'База данных недоступна'; }
     legacyNotice(error.message, true);
   }
 }
@@ -643,6 +643,25 @@ function installDatabaseAdmin() {
   const summary = document.querySelector('.admin-summary-grid');
   if (summary) {
     summary.insertAdjacentHTML('afterend', '<div class="backup-launch"><button type="button" class="ghost-button" data-action="backup-open">Резервные копии PostgreSQL</button></div>');
+    const page = document.querySelector('.admin-page');
+    const launch = page.querySelector('.backup-launch');
+    const otherSections = [...page.children].filter(node => node.classList.contains('content-card'));
+    const tabs = document.createElement('div'); tabs.className = 'admin-tabs';
+    tabs.innerHTML = '<button type="button" class="primary-button" data-admin-tab="users">Пользователи</button><button type="button" class="ghost-button" data-admin-tab="server">Сервер и копии</button>';
+    page.querySelector('.page-intro').after(tabs);
+    const serverPanel = document.createElement('section'); serverPanel.className = 'admin-server-panel'; serverPanel.hidden = true;
+    tabs.after(serverPanel); serverPanel.append(summary, launch);
+    const serverCard = serverPanel.querySelector('.server-admin-card');
+    serverCard.insertAdjacentHTML('beforeend', '<div class="system-status"><span>Система ТПП</span><span class="system-status-dot" role="status" aria-label="Проверка системы" title="Проверка системы"></span></div>');
+    const test = serverPanel.querySelector('[data-action="test-server"]'); if (test) test.className = 'primary-button';
+    tabs.addEventListener('click', event => {
+      const button = event.target.closest('[data-admin-tab]'); if (!button) return;
+      const server = button.dataset.adminTab === 'server'; serverPanel.hidden = !server;
+      otherSections.forEach(node => { node.hidden = server; });
+      document.querySelector('.admin-security-card').hidden = server;
+      if (server) { refreshSystemStatus(); loadDatabaseStatus(); }
+      tabs.querySelectorAll('button').forEach(tab => { tab.className = tab === button ? 'primary-button' : 'ghost-button'; });
+    });
     document.body.insertAdjacentHTML('beforeend', `<dialog id="database-backup-dialog" class="backup-dialog" aria-labelledby="backup-dialog-title">
       <section class="content-card backup-admin-card">
         <div class="card-heading"><div><span class="eyebrow">Резервное копирование</span><h3 id="backup-dialog-title">Экспорт и импорт базы данных</h3></div>
@@ -656,8 +675,18 @@ function installDatabaseAdmin() {
         <p id="restore-status" role="status"></p><div id="server-backup-list" class="backup-list"></div>
       </section></dialog>`);
   }
+  refreshSystemStatus();
+  setInterval(refreshSystemStatus, 30000);
   loadRestoreStatus();
   loadBackups().catch(error => legacyNotice(error.message, true));
+}
+
+function refreshSystemStatus() {
+  fetch('/health/ready/', {cache: 'no-store'}).then(response => {
+    const dot = document.querySelector('.system-status-dot'); if (!dot) return;
+    dot.classList.remove('online', 'offline');
+    dot.classList.add(response.ok ? 'online' : 'offline'); dot.title = response.ok ? 'Система и база доступны' : 'Система или база недоступна'; dot.setAttribute('aria-label', dot.title);
+  }).catch(() => { const dot = document.querySelector('.system-status-dot'); if (dot) { dot.classList.remove('online'); dot.classList.add('offline'); dot.title = 'Система недоступна'; dot.setAttribute('aria-label', dot.title); } });
 }
 
 async function loadBackups() {
@@ -705,7 +734,7 @@ async function loadServerUsers() {
   serverUsers = (await response.json()).users;
   window.loadUsers = () => serverUsers;
   renderUsers();
-  const counts = ['manager', 'technologist', 'normalizer', 'admin'];
+  const counts = ['manager', 'technologist', 'normalizer', 'admin', 'planner', 'supervisor', 'economist'];
   document.querySelectorAll('.permissions-table tbody tr').forEach((row, index) => {
     if (counts[index] && row.cells[1]) row.cells[1].textContent = serverUsers.filter(user => user.isActive && user.role === counts[index]).length;
   });
@@ -756,8 +785,35 @@ function installProfile() {
 
 function installMaintenance() {
   if (document.body.dataset.page !== 'admin') return;
-  const target = document.querySelector('.backup-launch'); if (!target) return;
-  const button = document.createElement('button'); button.className = 'ghost-button'; button.type = 'button'; target.append(' ', button);
+  const page = document.querySelector('.admin-page');
+  const target = document.createElement('section'); target.className = 'content-card admin-security-card';
+  target.innerHTML = '<div class="card-heading"><div><span class="eyebrow">Администрирование</span><h3>Безопасность</h3></div></div><div class="row-actions"></div>';
+  page.append(target);
+  const actions = target.querySelector('.row-actions');
+  const settings = document.createElement('button'); settings.className = 'ghost-button'; settings.type = 'button'; settings.textContent = 'Изменение логина и пароля'; actions.append(settings);
+  const button = document.createElement('button'); button.className = 'ghost-button'; button.type = 'button'; actions.append(button);
+  const dialog = document.createElement('dialog'); dialog.className = 'form-modal';
+  dialog.innerHTML = `<form class="form-modal-body"><h2>Общие настройки безопасности</h2><p>Настройки действуют для всех пользователей при изменении собственного профиля.</p>
+    <label><input type="checkbox" name="allowUsernameChanges"> Разрешить пользователям менять логин</label>
+    <label><input type="checkbox" name="allowPasswordChanges"> Разрешить пользователям менять пароль</label>
+    <p role="alert" class="editor-error"></p><footer><button type="button" class="ghost-button danger">Отмена</button><button class="primary-button">Сохранить</button></footer></form>`;
+  document.body.append(dialog); const form = dialog.querySelector('form');
+  settings.addEventListener('click', async () => {
+    try {
+      const response = await fetch('/api/admin/policy/'); if (!response.ok) throw new Error('Не удалось получить настройки');
+      const data = await response.json(); form.elements.allowUsernameChanges.checked = data.allowUsernameChanges; form.elements.allowPasswordChanges.checked = data.allowPasswordChanges;
+      dialog.querySelector('[role="alert"]').textContent = ''; dialog.showModal();
+    } catch (error) { legacyNotice(error.message, true); }
+  });
+  dialog.querySelector('button[type="button"]').addEventListener('click', () => dialog.close());
+  form.addEventListener('submit', async event => { event.preventDefault();
+    try {
+      const payload = {allowUsernameChanges: form.elements.allowUsernameChanges.checked, allowPasswordChanges: form.elements.allowPasswordChanges.checked};
+      const response = await fetch('/api/admin/policy/', {method: 'PUT', headers: apiHeaders(), body: JSON.stringify(payload)});
+      const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Не удалось сохранить настройки');
+      dialog.close(); legacyNotice('Настройки безопасности сохранены');
+    } catch (error) { dialog.querySelector('[role="alert"]').textContent = error.message; }
+  });
   let active = false;
   const render = () => { button.textContent = active ? 'Выключить технический режим' : 'Включить технический режим'; };
   fetch('/api/admin/policy/').then(r => { if (!r.ok) throw new Error('Не удалось получить состояние технического режима'); return r.json(); })
@@ -853,6 +909,12 @@ async function loadPlans() {
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || 'Не удалось загрузить план');
   renderPlans(data.items);
+  let status = document.querySelector('#plan-approval-status');
+  if (!status) { status = document.createElement('p'); status.id = 'plan-approval-status'; status.setAttribute('role', 'status'); document.querySelector('.planning-controls')?.after(status); }
+  if (data.program?.approved_by) {
+    const date = data.program.approved_at ? new Date(data.program.approved_at).toLocaleString('ru-RU') : '';
+    status.textContent = `План утверждён: ${data.program.approved_by}${date ? ` · ${date}` : ''}`;
+  } else status.textContent = data.program ? 'План сформирован' : 'План ещё не утверждён';
   return data;
 }
 
@@ -1653,7 +1715,7 @@ document.addEventListener('click', async event => {
         });
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || 'Не удалось утвердить план');
-        await loadPlans(); legacyNotice(`${result.name}: утверждено ${result.lines} позиций`);
+        await loadPlans(); legacyNotice('План утверждён');
       }
     } catch (error) { legacyNotice(error.message, true); }
     return;
@@ -1742,9 +1804,12 @@ document.addEventListener('click', async event => {
     event.stopPropagation(); event.preventDefault();
     const row = document.querySelector('.data-grid tbody tr.selected');
     if (!row?.dataset.orderPk || !confirm(`Удалить изделие из заказа ${row.dataset.order}?`)) return;
-    const response = await fetch(`/api/legacy/orders/${row.dataset.orderPk}/`, { method: 'DELETE', headers: apiHeaders(), body: JSON.stringify({ item_id: row.dataset.itemPk, reason: 'Удаление изделия в портфеле заказов' }) });
-    if (response.ok) { row.remove(); legacyNotice('Изделие удалено'); }
-    else { const result = await response.json(); legacyNotice(result.error || 'Не удалось удалить изделие', true); }
+    try {
+      const response = await fetch(`/api/legacy/orders/${row.dataset.orderPk}/`, { method: 'DELETE', headers: apiHeaders(), body: JSON.stringify({ item_id: row.dataset.itemPk, reason: 'Удаление изделия в портфеле заказов' }) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Не удалось удалить изделие');
+      await loadOrdersFromServer(); legacyNotice('Изделие удалено из портфеля');
+    } catch (error) { legacyNotice(error.message, true); }
   }
   if (action === 'archive-order') {
     event.stopPropagation(); event.preventDefault();
@@ -1829,9 +1894,7 @@ if (document.body.dataset.page === 'admin') {
     const payload = { username: String(values.get('username') || '').trim(),
       fullName: String(values.get('fullName') || '').trim(),
       password: String(values.get('password') || ''), role: String(values.get('role') || ''),
-      isActive: event.currentTarget.elements.isActive.checked,
-      canChangeUsername: event.currentTarget.elements.canChangeUsername.checked,
-      canChangePassword: event.currentTarget.elements.canChangePassword.checked };
+      isActive: event.currentTarget.elements.isActive.checked };
     try {
       const response = await fetch(user ? `/api/admin/users/${user.id}/` : '/api/admin/users/', {
         method: user ? 'PUT' : 'POST', headers: apiHeaders(), body: JSON.stringify(payload)

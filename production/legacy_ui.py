@@ -5,6 +5,8 @@ import os
 import time
 import tempfile
 import subprocess
+import hashlib
+from functools import lru_cache
 from copy import copy
 import psycopg
 from decimal import Decimal, InvalidOperation
@@ -64,7 +66,7 @@ TABLE_ROLES = {
     "settings-columns": {"admin", "technologist"},
     "settings-plan-inputs": {"admin"},
 }
-ADMIN_ROLES = {"admin", "manager", "technologist", "normalizer"}
+ADMIN_ROLES = {"admin", "manager", "technologist", "normalizer", "planner", "supervisor", "economist"}
 
 
 def require_admin(request):
@@ -248,11 +250,18 @@ def backup_restore(request):
         return JsonResponse({"ok": False, "error": str(exc)}, status=400)
 
 
+def display_user_name(user):
+    # В старой тестовой фикстуре текст был утрачен и заменён вопросительными знаками.
+    if user.first_name == "???????-????????" and user.username.startswith("technologist_"):
+        return f"Инженер-технолог {user.username.removeprefix('technologist_')}"
+    return user.get_full_name() or user.username
+
+
 def user_payload(user):
     profile = getattr(user, "profile", None)
     return {"id": user.pk, "username": user.username,
-        "fullName": user.get_full_name() or user.username,
-        "role": user.groups.first().name if user.groups.exists() else ("admin" if user.is_superuser else "technologist"),
+        "fullName": display_user_name(user),
+        "role": "admin" if user.is_superuser else (user.groups.first().name if user.groups.exists() else "unassigned"),
         "isActive": user.is_active, "canChangeUsername": bool(profile and profile.can_change_username),
         "canChangePassword": bool(profile and profile.can_change_password)}
 
@@ -265,28 +274,37 @@ def policy_api(request):
     if request.method == "PUT":
         try:
             data = json.loads(request.body)
-            if not isinstance(data.get("maintenance"), bool):
-                raise ValueError("Укажите состояние технического режима")
-            policy, _ = SitePolicy.objects.update_or_create(pk=1, defaults={
-                "maintenance": data["maintenance"], "maintenance_owner": request.user if data["maintenance"] else None})
-            AuditLog.objects.create(user=request.user, model_name="SitePolicy", object_id=1, action="update", reason="Технический режим")
+            fields = {"maintenance": "maintenance", "allowUsernameChanges": "allow_username_changes", "allowPasswordChanges": "allow_password_changes"}
+            if not isinstance(data, dict) or not data or any(key not in fields or not isinstance(value, bool) for key, value in data.items()):
+                raise ValueError("Неверные параметры безопасности")
+            with transaction.atomic():
+                policy, _ = SitePolicy.objects.select_for_update().get_or_create(pk=1)
+                for key, value in data.items():
+                    setattr(policy, fields[key], value)
+                if "maintenance" in data:
+                    policy.maintenance_owner = request.user if data["maintenance"] else None
+                policy.save()
+                AuditLog.objects.create(user=request.user, model_name="SitePolicy", object_id=1, action="update", reason="Настройки безопасности")
         except (ValueError, TypeError) as exc:
             return JsonResponse({"ok": False, "error": str(exc)}, status=400)
     else:
         policy = SitePolicy.objects.filter(pk=1).first()
-    return JsonResponse({"maintenance": bool(policy and policy.maintenance)})
+    return JsonResponse({"maintenance": bool(policy and policy.maintenance),
+        "allowUsernameChanges": bool(policy and policy.allow_username_changes),
+        "allowPasswordChanges": bool(policy and policy.allow_password_changes)})
 
 
 @login_required
 @require_http_methods(["GET", "POST"])
 def profile_api(request):
-    from .models import UserProfile
+    from .models import UserProfile, SitePolicy
     from django.contrib.auth import update_session_auth_hash
     from PIL import Image, ImageOps, UnidentifiedImageError
     profile, _ = UserProfile.objects.get_or_create(user=request.user)
     user = request.user
-    allow_name = profile.can_change_username or user.is_superuser
-    allow_password = profile.can_change_password or user.is_superuser
+    policy = SitePolicy.objects.filter(pk=1).first()
+    allow_name = bool(policy and policy.allow_username_changes)
+    allow_password = bool(policy and policy.allow_password_changes)
     if request.method == "POST":
         try:
             username = request.POST.get("username", user.username).strip()
@@ -377,7 +395,7 @@ def save_user_api(request, user=None):
             raise ValueError("Укажите логин, ФИО и роль")
         if user is None and not password:
             raise ValueError("Для нового пользователя нужен пароль")
-        if user and not user.has_usable_password() and not password:
+        if user and not user.has_usable_password() and not password and data.get("isActive", user.is_active):
             raise ValueError("Для активации учётной записи задайте индивидуальный пароль")
         if User.objects.filter(username=username).exclude(pk=user.pk if user else None).exists():
             raise ValueError("Такой логин уже существует")
@@ -469,7 +487,10 @@ def plans_api(request):
                     "start_date": item.order.start_date.isoformat(), "due_date": item.order.due_date.isoformat(),
                     "progress": item.order.progress, "hours": str(hours),
                     "remaining_by_category": [str(value) for value in categories], "planned": item.pk in planned})
-            return JsonResponse({"items": rows, "program": {"id": program.pk, "status": program.status} if program else None})
+            audit = AuditLog.objects.filter(model_name="Program", object_id=program.pk, action="approve").select_related("user").first() if program else None
+            return JsonResponse({"items": rows, "program": {"id": program.pk, "status": program.status,
+                "approved_by": display_user_name(audit.user) if audit and audit.user else None,
+                "approved_at": audit.created_at.isoformat() if audit else None} if program else None})
         if not items:
             raise ValueError("Нет заказов для выбранного периода")
         with transaction.atomic():
@@ -915,6 +936,14 @@ def save_deviation_api(request, item=None):
         return JsonResponse({"ok": False, "error": str(exc)}, status=400)
 
 
+@lru_cache(maxsize=1)
+def legacy_assets_version():
+    digest = hashlib.sha256()
+    for name in ("legacy/js/app.js", "legacy/css/style.css", "bridge/server-bridge.js", "bridge/server-bridge.css"):
+        digest.update((settings.BASE_DIR / "static" / "production" / name).read_bytes())
+    return digest.hexdigest()[:16]
+
+
 @login_required
 def page(request, name="index"):
     if name not in PAGES:
@@ -924,10 +953,11 @@ def page(request, name="index"):
     markup = render_to_string(f"production/legacy/{name}.html", request=request)
     user = request.user
     original_role = role(user)
-    data = {"username": user.username, "fullName": user.get_full_name() or user.username, "role": original_role}
+    data = {"username": user.username, "fullName": display_user_name(user), "role": original_role}
     bootstrap = "<script>const legacyUser=" + json.dumps(data, ensure_ascii=False).replace("<", "\\u003c") + ";sessionStorage.setItem('oecAuthorized','true');sessionStorage.setItem('oecUser',legacyUser.username);sessionStorage.setItem('oecFullName',legacyUser.fullName);sessionStorage.setItem('oecRole',legacyUser.role);</script>"
-    markup = markup.replace('<script src="js/app.js"></script>', bootstrap + '<script src="/static/production/legacy/js/app.js"></script><script src="/static/production/bridge/server-bridge.js"></script>')
-    markup = markup.replace('href="css/style.css"', 'href="/static/production/legacy/css/style.css"><link rel="stylesheet" href="/static/production/bridge/server-bridge.css"')
+    version = legacy_assets_version()
+    markup = markup.replace('<script src="js/app.js"></script>', bootstrap + f'<script src="/static/production/legacy/js/app.js?v={version}"></script><script src="/static/production/bridge/server-bridge.js?v={version}"></script>')
+    markup = markup.replace('href="css/style.css"', f'href="/static/production/legacy/css/style.css?v={version}"><link rel="stylesheet" href="/static/production/bridge/server-bridge.css?v={version}"')
     markup = markup.replace('</head>', '<link rel="icon" type="image/svg+xml" href="/static/production/legacy/assets/favicon.svg"></head>', 1)
     markup = markup.replace('src="assets/', 'src="/static/production/legacy/assets/')
     return HttpResponse(markup)
