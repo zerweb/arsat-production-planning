@@ -1073,6 +1073,60 @@ class WorkflowTests(TestCase):
         self.assertEqual(self.client.delete(f"/api/legacy/deviations/{pk}/").status_code, 200)
         self.assertFalse(m.Downtime.objects.filter(pk=pk).exists())
 
+    def test_nonconformity_draft_crud_and_order_protection(self):
+        item = m.OrderItem.objects.select_related("order").first()
+        payload = {"number": "NC-TEST-01", "date": "2026-10-15", "order_item": item.pk,
+            "source_document": "Чертёж А-1", "batch_quantity": 1,
+            "unit_labor_hours": "2.000", "deviation_labor_hours": "3.500",
+            "corrective_action": "Провести проверку", "action_due_date": "2026-11-01",
+            "lines": [{"requirement": "Размер 20", "actual": "Размер 21", "quantity": 1, "reason": "Отклонение"},
+                      {"requirement": "Материал А", "actual": "Материал Б", "quantity": 1, "reason": "Ошибка"}]}
+        downtime_count = m.Downtime.objects.count()
+        created = self.client.post("/api/nonconformities/", data=json.dumps(payload), content_type="application/json")
+        self.assertEqual(created.status_code, 200, created.content)
+        pk = created.json()["card"]["id"]
+        card = m.NonconformityCard.objects.get(pk=pk)
+        self.assertEqual(card.order_item_id, item.pk)
+        self.assertEqual(card.lines.count(), 2)
+        self.assertEqual(m.Downtime.objects.count(), downtime_count)
+        payload["lines"][0]["quantity"] = 2
+        invalid = self.client.put(f"/api/nonconformities/{pk}/", data=json.dumps(payload), content_type="application/json")
+        self.assertEqual(invalid.status_code, 400)
+        self.assertEqual(card.lines.count(), 2)
+        self.assertEqual(card.lines.first().quantity, 1)
+        payload["lines"][0]["quantity"] = 1
+        printed = self.client.get(f"/nonconformities/{pk}/print/")
+        self.assertEqual(printed.status_code, 200)
+        self.assertContains(printed, "Чертёж А-1")
+        self.assertContains(printed, "Размер 21")
+        self.assertContains(printed, "не содержит электронной подписи")
+        from django.db.models.deletion import ProtectedError
+        with self.assertRaises(ProtectedError):
+            item.delete()
+        payload["lines"] = [payload["lines"][1]]
+        updated = self.client.put(f"/api/nonconformities/{pk}/", data=json.dumps(payload), content_type="application/json")
+        self.assertEqual(updated.status_code, 200, updated.content)
+        self.assertEqual(card.lines.count(), 1)
+        self.assertEqual(self.client.delete(f"/api/nonconformities/{pk}/").status_code, 200)
+        self.assertFalse(m.NonconformityCard.objects.filter(pk=pk).exists())
+
+    def test_nonconformity_rejects_invalid_lines_and_unauthorized_changes(self):
+        item = m.OrderItem.objects.first()
+        payload = {"number": "NC-TEST-02", "date": "2026-10-15", "order_item": item.pk,
+            "source_document": "ТУ", "batch_quantity": 1,
+            "lines": [{"requirement": "Требование", "actual": "Факт", "quantity": 2, "reason": "Причина"}]}
+        response = self.client.post("/api/nonconformities/", data=json.dumps(payload), content_type="application/json")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("quantity", response.json()["lines"][0])
+        self.assertFalse(m.NonconformityCard.objects.filter(number="NC-TEST-02").exists())
+        user = User.objects.get(username="planner")
+        self.client.force_login(user)
+        self.assertEqual(self.client.get("/api/nonconformities/").status_code, 200)
+        self.assertFalse(self.client.get("/api/nonconformities/").json()["can_write"])
+        self.assertEqual(self.client.post("/api/nonconformities/", data=json.dumps(payload), content_type="application/json").status_code, 403)
+        self.client.logout()
+        self.assertEqual(self.client.get("/api/nonconformities/").status_code, 302)
+
     def test_deviation_uses_selected_job_and_keeps_it_on_edit(self):
         job = m.Job.objects.select_related("program_line__order_item__order").first()
         order = job.program_line.order_item.order

@@ -1,0 +1,19 @@
+<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>Карта отклонений {{ card.number }}</title>
+<style>body{font:14px Arial,sans-serif;color:#111;margin:24px auto;max-width:950px}h1{text-align:center;font-size:20px}h2{font-size:15px;margin-top:24px}table{width:100%;border-collapse:collapse;margin:12px 0}th,td{border:1px solid #555;padding:7px;vertical-align:top;overflow-wrap:anywhere}.details{display:grid;grid-template-columns:1fr 1fr;gap:8px}.muted{color:#555}.signatures{line-height:2.3}@media print{body{margin:0}.no-print{display:none}}</style></head><body>
+<button class="no-print" type="button" onclick="window.print()">Печать</button>
+<p class="muted">Черновик · на основе рекомендуемой формы № 2 приложения Д СТО ДП 086-408-2024</p>
+<h1>КАРТА ОТКЛОНЕНИЙ № {{ card.number }}</h1>
+<div class="details"><div>Дата: {{ card.date|date:"d.m.Y" }}</div><div>Регистрационный номер: {{ card.register_number|default:"—" }}</div>
+<div>Заказ: {{ card.order_item.order.number }}</div><div>Заказчик: {{ card.order_item.order.customer.name }}</div>
+<div>Изделие: {{ card.order_item.product.name }}</div><div>Чертёж: {{ card.order_item.product.drawing|default:"—" }}</div>
+<div>Узел: {{ card.assembly|default:"—" }}</div><div>Чертёж узла: {{ card.assembly_drawing|default:"—" }}</div>
+<div>Деталь: {{ card.detail|default:"—" }}</div><div>Чертёж детали: {{ card.detail_drawing|default:"—" }}</div>
+<div>Документ: {{ card.source_document }}</div><div>Изготовление и контроль по: {{ card.manufacturing_basis|default:"—" }}</div></div>
+<table><thead><tr><th>Должно быть по НТД</th><th>Фактически выполнено</th><th>Количество деталей</th><th>Причина отклонения, шифр</th></tr></thead><tbody>
+{% for line in card.lines.all %}<tr><td>{{ line.requirement|linebreaksbr }}</td><td>{{ line.actual|linebreaksbr }}</td><td>{{ line.quantity }}</td><td>{{ line.reason|linebreaksbr }}</td></tr>{% endfor %}</tbody></table>
+<p>Партия: {{ card.batch_quantity }} шт. · Трудоёмкость одной детали: {{ card.unit_labor_hours|default_if_none:"—" }} н/ч · Операции с отклонением: {{ card.deviation_labor_hours|default_if_none:"—" }} н/ч</p>
+<p>Операция обнаружения: {{ card.detection_operation|default:"—" }}<br>Контролёр ОТК: {{ card.inspector|default:"—" }}<br>Изготовитель: {{ card.manufacturer|default:"—" }}<br>Руководитель участка: {{ card.manager|default:"—" }}<br>Начальник УТК: {{ card.quality_manager|default:"—" }}</p>
+<h2>Решения и заключение</h2><p>Технолог: {{ card.technologist_decision|default:"—"|linebreaksbr }}</p><p>Представитель заказчика: {{ card.customer_decision|default:"—"|linebreaksbr }}</p><p>Разработчик КД: {{ card.designer_conclusion|default:"—"|linebreaksbr }}</p>
+<h2>Корректирующие действия</h2><p>{{ card.corrective_action|default:"—"|linebreaksbr }}</p><p>Срок: {{ card.action_due_date|date:"d.m.Y"|default:"—" }} · Ответственный: {{ card.action_responsible|default:"—" }}</p>
+<div class="signatures"><p>Согласовано: ____________________________ Дата: __________</p><p>Утверждаю: _____________________________ Дата: __________</p></div>
+<p class="muted">Черновик не является утверждённым документом и не содержит электронной подписи.</p></body></html>

@@ -946,7 +946,7 @@ def save_deviation_api(request, item=None):
 @lru_cache(maxsize=1)
 def legacy_assets_version():
     digest = hashlib.sha256()
-    for name in ("legacy/js/app.js", "legacy/css/style.css", "bridge/server-bridge.js", "bridge/server-bridge.css"):
+    for name in ("legacy/js/app.js", "legacy/css/style.css", "bridge/server-bridge.js", "bridge/server-bridge.css", "bridge/nonconformities.js"):
         digest.update((settings.BASE_DIR / "static" / "production" / name).read_bytes())
     return digest.hexdigest()[:16]
 
@@ -963,7 +963,8 @@ def page(request, name="index"):
     data = {"username": user.username, "fullName": display_user_name(user), "role": original_role}
     bootstrap = "<script>const legacyUser=" + json.dumps(data, ensure_ascii=False).replace("<", "\\u003c") + ";sessionStorage.setItem('oecAuthorized','true');sessionStorage.setItem('oecUser',legacyUser.username);sessionStorage.setItem('oecFullName',legacyUser.fullName);sessionStorage.setItem('oecRole',legacyUser.role);</script>"
     version = legacy_assets_version()
-    markup = markup.replace('<script src="js/app.js"></script>', bootstrap + f'<script src="/static/production/legacy/js/app.js?v={version}"></script><script src="/static/production/bridge/server-bridge.js?v={version}"></script>')
+    extra = f'<script src="/static/production/bridge/nonconformities.js?v={version}"></script>' if name in ("form2", "processes") else ""
+    markup = markup.replace('<script src="js/app.js"></script>', bootstrap + f'<script src="/static/production/legacy/js/app.js?v={version}"></script><script src="/static/production/bridge/server-bridge.js?v={version}"></script>' + extra)
     markup = markup.replace('href="css/style.css"', f'href="/static/production/legacy/css/style.css?v={version}"><link rel="stylesheet" href="/static/production/bridge/server-bridge.css?v={version}"')
     markup = markup.replace('</head>', '<link rel="icon" type="image/svg+xml" href="/static/production/legacy/assets/favicon.svg"></head>', 1)
     markup = markup.replace('src="assets/', 'src="/static/production/legacy/assets/')

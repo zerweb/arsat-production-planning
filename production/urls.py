@@ -1,5 +1,5 @@
 from django.urls import path
-from . import views, legacy_ui, health
+from . import views, legacy_ui, health, nonconformities
 
 urlpatterns = [
     path("health/live/", health.live, name="health_live"),
@@ -57,6 +57,9 @@ urlpatterns = [
     path("api/legacy/processes/<int:pk>/", legacy_ui.process_api, name="legacy_process_api"),
     path("api/legacy/deviations/", legacy_ui.deviations_api, name="legacy_deviations_api"),
     path("api/legacy/deviations/<int:pk>/", legacy_ui.deviation_api, name="legacy_deviation_api"),
+    path("api/nonconformities/", nonconformities.cards, name="nonconformity_cards"),
+    path("api/nonconformities/<int:pk>/", nonconformities.card_detail, name="nonconformity_card"),
+    path("nonconformities/<int:pk>/print/", nonconformities.print_card, name="nonconformity_print"),
     path("api/legacy/orders/<int:pk>/", legacy_ui.order_api, name="legacy_order_api"),
     path("api/legacy/table/<str:key>/row/", legacy_ui.table_row_api, name="legacy_table_row_api"),
     path("api/legacy/table/<str:key>/", legacy_ui.table_api, name="legacy_table_api"),

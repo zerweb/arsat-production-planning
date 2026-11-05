@@ -476,6 +476,61 @@ class ProductionEvent(models.Model):
                 raise ValidationError("Нельзя сдать больше принятого количества.")
 
 
+class NonconformityCard(models.Model):
+    """Черновик карты несоответствия продукции по форме Д.2."""
+    number = models.CharField("Номер карты", max_length=80, unique=True)
+    date = models.DateField("Дата", default=timezone.localdate)
+    order_item = models.ForeignKey(OrderItem, on_delete=models.PROTECT, related_name="nonconformity_cards", verbose_name="Позиция заказа")
+    source_document = models.CharField("Чертёж, ТУ или технологический процесс", max_length=200)
+    register_number = models.CharField("Регистрационный номер по журналу НП", max_length=100, blank=True)
+    assembly = models.CharField("Узел", max_length=200, blank=True)
+    assembly_drawing = models.CharField("Чертёж узла", max_length=100, blank=True)
+    detail = models.CharField("Деталь", max_length=200, blank=True)
+    detail_drawing = models.CharField("Чертёж детали", max_length=100, blank=True)
+    manufacturing_basis = models.CharField("Изготовление и контроль по", max_length=300, blank=True)
+    batch_quantity = models.PositiveIntegerField("Партия деталей")
+    unit_labor_hours = models.DecimalField("Трудоёмкость одной детали, н/ч", max_digits=10, decimal_places=3, null=True, blank=True, validators=[MinValueValidator(0)])
+    deviation_labor_hours = models.DecimalField("Трудоёмкость операции с отклонением, н/ч", max_digits=10, decimal_places=3, null=True, blank=True, validators=[MinValueValidator(0)])
+    detection_operation = models.CharField("Операция обнаружения", max_length=200, blank=True)
+    inspector = models.CharField("Контролёр ОТК", max_length=200, blank=True)
+    manufacturer = models.CharField("Изготовитель", max_length=200, blank=True)
+    manager = models.CharField("Руководитель участка", max_length=200, blank=True)
+    quality_manager = models.CharField("Начальник УТК", max_length=200, blank=True)
+    technologist_decision = models.TextField("Решение технолога", blank=True)
+    customer_decision = models.TextField("Решение представителя заказчика", blank=True)
+    designer_conclusion = models.TextField("Заключение разработчика КД", blank=True)
+    corrective_action = models.TextField("Корректирующие действия", blank=True)
+    action_due_date = models.DateField("Срок выполнения", null=True, blank=True)
+    action_responsible = models.CharField("Ответственный за действия", max_length=200, blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="nonconformity_cards")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-date", "-pk"]
+        constraints = [models.CheckConstraint(condition=models.Q(batch_quantity__gt=0), name="nonconformity_batch_positive")]
+
+    def clean(self):
+        if self.order_item_id and self.batch_quantity and self.batch_quantity > self.order_item.quantity:
+            raise ValidationError({"batch_quantity": "Партия не может превышать количество в позиции заказа."})
+
+
+class NonconformityLine(models.Model):
+    card = models.ForeignKey(NonconformityCard, on_delete=models.CASCADE, related_name="lines")
+    requirement = models.TextField("Должно быть по НТД")
+    actual = models.TextField("Фактически выполнено")
+    quantity = models.PositiveIntegerField("Количество деталей")
+    reason = models.TextField("Причина отклонения, шифр")
+
+    class Meta:
+        ordering = ["pk"]
+        constraints = [models.CheckConstraint(condition=models.Q(quantity__gt=0), name="nonconformity_line_positive")]
+
+    def clean(self):
+        if self.card_id and self.quantity and self.quantity > self.card.batch_quantity:
+            raise ValidationError({"quantity": "Количество не может превышать размер партии."})
+
+
 class QualityCheck(models.Model):
     RESULTS = [("accepted", "Принято"), ("rejected", "Отклонено"), ("rework", "Доработка")]
     job = models.ForeignKey(Job, on_delete=models.PROTECT, related_name="quality_checks", verbose_name="Задание")
